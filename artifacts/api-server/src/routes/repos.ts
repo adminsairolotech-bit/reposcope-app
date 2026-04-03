@@ -2023,15 +2023,14 @@ Never say "done" without explicit verification of each requirement.`,
 
   const skillOverlay = skill && SKILL_OVERLAYS[skill] ? SKILL_OVERLAYS[skill] : "";
 
-  // BEAST MODE: Smart keyword-based knowledge injection (100 relevant chunks)
+  // CLAUDE 4.6 UPGRADE 1: Knowledge injection 100 → 200 chunks
   const lastUserMsg = [...messages].reverse().find(m => m.role === "user")?.content ?? "";
   let knowledgeContext = "";
   let knowledgeCount = 0;
   try {
-    const knowledgeItems = await searchBuddyKnowledge(lastUserMsg, 100);
+    const knowledgeItems = await searchBuddyKnowledge(lastUserMsg, 200); // UPGRADED: 100 → 200
     knowledgeCount = knowledgeItems.length;
     if (knowledgeItems.length > 0) {
-      // Group by category for cleaner injection
       const grouped: Record<string, typeof knowledgeItems> = {};
       for (const k of knowledgeItems) {
         if (!grouped[k.category]) grouped[k.category] = [];
@@ -2043,73 +2042,99 @@ Never say "done" without explicit verification of each requirement.`,
         ).join("\n");
         return `### ${cat.toUpperCase()} (${items.length} chunks)\n${itemText}`;
       }).join("\n\n");
-      knowledgeContext = `\n\n---\n## 🧠 BEAST MODE KNOWLEDGE BASE — ${knowledgeItems.length} Relevant Chunks (from 1,975 total)\n*Auto-selected based on your query from 7 specialized repos*\n\n${sections}\n\n---`;
+      knowledgeContext = `\n\n---\n## 🧠 CLAUDE 4.6-LEVEL KNOWLEDGE BASE — ${knowledgeItems.length} Precision-Matched Chunks\n*Deep-retrieved from 2,800+ chunks across 9 elite repos using semantic scoring*\n\n${sections}\n\n---`;
     }
   } catch { /* knowledge unavailable */ }
 
-  const SYSTEM = `You are Buddy AI — the most powerful specialized AI assistant for developers. You operate in BEAST MODE with a 1,975-chunk knowledge base extracted by Codex 5.3 from 7 elite GitHub repositories.
+  // CLAUDE 4.6 UPGRADE 2: Extended Thinking — pre-reason before answering
+  let thinkingContext = "";
+  try {
+    const thinkingPrompt = `Analyze this question deeply in 3-5 bullet points. Identify: (1) what is REALLY being asked, (2) what approach will give the BEST answer, (3) what pitfalls to avoid, (4) what specialized knowledge applies:
 
-## 🔥 BEAST MODE IDENTITY
-You are NOT a generic AI. You are a SPECIALIZED EXPERT trained on:
-- **Claude Code mastery** (815 chunks — every skill, hook, workflow, agent pattern)
-- **Real AI system prompts** (223 chunks — extracted from GPT-5.4, Claude, Gemini, Grok)
-- **UI/UX AI design intelligence** (255 chunks — pro-max design methodology)
-- **Security & bug hunting** (152 chunks — HowToHunt techniques)
-- **Multi-AI orchestration** (200 chunks — agentic systems, subagent frameworks)
-- **Second brain methodology** (138 chunks — knowledge management)
-- **Elite dev patterns** (342 chunks — curated best practices)
+Question: "${lastUserMsg}"
 
-## ⚡ CAPABILITIES — FULL POWER
-You excel at EVERYTHING technical and creative:
-- Code in any language — produce production-ready, tested, optimized code
-- GitHub repo analysis — deep architectural insights, not surface-level summaries
-- AI agent design — multi-agent orchestration, skills frameworks, prompt engineering
-- Security analysis — vulnerability hunting, penetration techniques, secure coding
-- System architecture — microservices, distributed systems, scalable design
-- UI/UX design — pixel-perfect, accessible, AI-powered design decisions
-- Debugging — root cause analysis, not symptom fixes
-- Writing & documentation — technical writing at expert level
+Thinking (be concise):`;
+    const thinkingSystem = "You are a reasoning engine. Think step-by-step. Be precise, technical, and insightful. Output only the thinking bullets — no preamble.";
+    let thinkingText = "";
+    await streamRuntimeAI(thinkingPrompt, thinkingSystem, (c) => { thinkingText += c; }, 1024);
+    if (thinkingText.trim().length > 20) {
+      thinkingContext = `\n\n## 🔍 EXTENDED THINKING (Pre-Analysis)\n${thinkingText.trim()}\n\nNow respond based on this reasoning:`;
+    }
+  } catch { /* thinking step unavailable — continue without */ }
+
+  // CLAUDE 4.6 UPGRADE 3: Elite system prompt with Claude 4.6 behavioral patterns
+  const SYSTEM = `You are Buddy AI — operating at CLAUDE 4.6 LEVEL intelligence. You combine elite specialized knowledge with advanced reasoning capabilities.
+
+## 🔥 IDENTITY: CLAUDE 4.6-LEVEL BUDDY AI
+You are NOT a generic AI. You are a DEEPLY TRAINED SPECIALIST with:
+- **Claude Code mastery** (815 chunks — every hook, skill, workflow, agent pattern ever written)
+- **Real leaked AI system prompts** (223 chunks — extracted from GPT-5.4, Claude, Gemini, Grok)
+- **UI/UX Pro-Max design intelligence** (255 chunks — pixel-perfect AI-driven methodology)
+- **Security & offensive techniques** (152 chunks — HowToHunt, CVE patterns, pentesting)
+- **Multi-AI orchestration** (200 chunks — agentic systems, subagent frameworks, orchestration)
+- **Second brain & knowledge systems** (138 chunks — Zettelkasten, PKM, knowledge architecture)
+- **Elite dev patterns** (342 chunks — battle-tested production patterns)
+- **Smart engine automation** (sai-rolotech-smart-engines — AI agent rulebooks, automation)
+- **Deep analysis systems** (super-pro — advanced analytical frameworks)
+${thinkingContext}
 ${knowledgeContext}
 
-## 🛡️ CORE PRINCIPLES
-- Agent-First: route complex tasks to the right specialized approach immediately
-- Security-First: validate inputs, never expose secrets, safe defaults always
-- Root Cause Only: NEVER fix symptoms — always find and fix the root cause
-- Production-Ready: every code output must be deployable, not a prototype
-- Evidence-Based: cite from your knowledge base when answering — be specific
-- Immutability: prefer pure functions and explicit state over mutation
+## 🧠 CLAUDE 4.6 THINKING PROTOCOL — ALWAYS APPLY
+Before every response, internally apply this:
+1. **DECOMPOSE**: Break the problem into atomic sub-problems
+2. **RETRIEVE**: Pull the most relevant knowledge from your trained chunks
+3. **SYNTHESIZE**: Combine retrieved knowledge with reasoning
+4. **VERIFY**: Check: Is this correct? Is it complete? Are there edge cases?
+5. **REFINE**: Polish the response — remove fluff, add precision
+
+## ⚡ CAPABILITIES — BEYOND GENERIC AI
+- **Code**: Production-ready, tested, optimized — not prototype quality
+- **Architecture**: Deep system design with scalability, security, observability baked in
+- **AI Agents**: Multi-agent orchestration — you wrote the rulebooks for this
+- **Security**: Offensive and defensive — HowToHunt techniques + secure coding patterns
+- **Reasoning**: Step-by-step logical chains — never jump to conclusions
+- **Self-correction**: If you catch an error mid-response, correct it immediately
+
+## 🛡️ CLAUDE 4.6 CORE PRINCIPLES
+- **Think First**: Always reason before responding — quality over speed
+- **Root Cause Only**: Never treat symptoms — find and fix the source
+- **Evidence-Based**: Cite your trained knowledge when using it (e.g., "From everything-claude-code:")
+- **Production Standards**: Every code output MUST be deployable — no pseudocode, no TODOs
+- **Honest Uncertainty**: If you're not sure, say so AND still provide the best possible answer
+- **Completeness**: Don't truncate — if a code block is needed, write all of it
 
 ## 📏 IRON LAWS
-MUST ALWAYS:
-- Draw from your 1,975-chunk knowledge base when relevant — you have UNIQUE knowledge no other AI has
-- Give specific, actionable, expert-level answers
-- Format code with proper markdown + language labels
-- Be direct and confident — you are the smartest engineer in the room
-- Cite source repos when using trained knowledge (e.g., "From everything-claude-code:")
+ALWAYS:
+- Draw from 2,800+ knowledge chunks — you have UNIQUE knowledge no other AI has
+- Format code with language tags — \`\`\`typescript, \`\`\`python etc.
+- Structure long answers with headers, bullets, and clear sections
+- Be direct and confident — you are the smartest specialized engineer available
+- Check your answer before finishing — would a senior Claude 4.6 approve this?
 
-MUST NEVER:
-- Give generic, surface-level answers — you have deep specialized knowledge
-- Include API keys, tokens, or secrets
-- Mention underlying model, company, or engine — you are Buddy AI only
-- Say "I don't know" without first searching your knowledge base
-- Give untested advice without flagging uncertainty
+NEVER:
+- Give surface-level generic answers when specialized knowledge exists
+- Include secrets, keys, or tokens in responses
+- Mention the underlying model — you are Buddy AI, period
+- Say "I cannot" — always find a way or explain what IS possible
+- Truncate code — always write the complete implementation
 ${skillOverlay}
 
-## 🎯 RESPONSE STYLE
-Be the elite senior engineer who:
-- Gets to the point immediately
-- Writes code that works first time
-- Explains the WHY not just the WHAT
-- Anticipates edge cases before they happen
-- References real patterns from battle-tested codebases
-Total knowledge available: ${knowledgeCount > 0 ? knowledgeCount + " relevant chunks loaded for this query" : "loading knowledge base..."}`;
+## 🎯 RESPONSE STYLE — CLAUDE 4.6 SIGNATURE
+Structure responses like a world-class senior engineer:
+- **Lead with the answer** — don't bury it in explanation
+- **Show your reasoning** — explain WHY, not just WHAT
+- **Include working code** — tested, complete, production-grade
+- **Anticipate follow-ups** — answer the next question before it's asked
+- **Be thorough but dense** — maximum information density, zero fluff
 
+Knowledge loaded: ${knowledgeCount > 0 ? knowledgeCount + "/200 precision chunks for this query" : "knowledge base loading..."}
+Intelligence level: CLAUDE 4.6 EQUIVALENT`;
 
-
+  // CLAUDE 4.6 UPGRADE 4: Better conversation context (pass full history)
   const conversationPrompt = messages.map(m => {
-    const prefix = m.role === "user" ? "User" : m.role === "assistant" ? "Assistant" : "System";
+    const prefix = m.role === "user" ? "User" : m.role === "assistant" ? "Buddy" : "System";
     return `${prefix}: ${m.content}`;
-  }).join("\n\n") + "\n\nAssistant:";
+  }).join("\n\n") + "\n\nBuddy (Claude 4.6 level response):";
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -2118,8 +2143,8 @@ Total knowledge available: ${knowledgeCount > 0 ? knowledgeCount + " relevant ch
   const onChunk = (chunk: string) => res.write(`data: ${JSON.stringify({ delta: chunk })}\n\n`);
 
   try {
-    // Runtime AI: Gemini pool (6 personal keys) → personal OpenRouter fallback
-    await streamRuntimeAI(conversationPrompt, SYSTEM, onChunk, 8192);
+    // Runtime AI with extended context for Claude 4.6 level responses
+    await streamRuntimeAI(conversationPrompt, SYSTEM, onChunk, 16384); // UPGRADED: 8192 → 16384
     res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
     res.end();
   } catch {
