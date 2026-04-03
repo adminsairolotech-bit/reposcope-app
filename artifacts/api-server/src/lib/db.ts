@@ -281,6 +281,59 @@ export async function loadBuddyKnowledge(limit = 50): Promise<{ title: string; c
   return rows.map(r => ({ title: r.title, category: r.category, content: r.content, source_repo: r.source_repo }));
 }
 
+export async function searchBuddyKnowledge(
+  query: string,
+  limit = 100
+): Promise<{ title: string; category: string; content: string; source_repo: string }[]> {
+  const db = getPool();
+
+  // Extract meaningful keywords (>3 chars, not stopwords)
+  const stopwords = new Set(["what","this","that","with","from","have","will","your","they","them","then","than","when","where","which","about","into","would","there","their","these","those","been","were","also","more","some","such","very","just","like","only","over","even","after","other","know","take","make","much","many","most","both","each","well","need","does","must","should"]);
+  const keywords = query
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(k => k.length > 3 && !stopwords.has(k))
+    .slice(0, 6);
+
+  if (keywords.length === 0) return loadBuddyKnowledge(limit);
+
+  // Score-based search: more keyword matches = higher relevance
+  const conditions = keywords.map((k, i) =>
+    `(CASE WHEN title ILIKE $${i+1} THEN 3 ELSE 0 END +
+      CASE WHEN content ILIKE $${i+1} THEN 2 ELSE 0 END +
+      CASE WHEN category ILIKE $${i+1} THEN 1 ELSE 0 END)`
+  ).join(" + ");
+
+  const params = keywords.map(k => `%${k}%`);
+
+  const { rows } = await db.query(
+    `SELECT title, category, content, source_repo,
+            (${conditions}) AS relevance_score
+     FROM buddy_knowledge
+     WHERE (${conditions}) > 0
+     ORDER BY relevance_score DESC, trained_at DESC
+     LIMIT $${keywords.length + 1}`,
+    [...params, limit]
+  );
+
+  // If not enough results, supplement with general knowledge
+  if (rows.length < limit / 2) {
+    const extra = await loadBuddyKnowledge(limit - rows.length);
+    const seen = new Set(rows.map((r: Record<string,unknown>) => r.title));
+    for (const e of extra) {
+      if (!seen.has(e.title)) rows.push({ ...e, relevance_score: 0 });
+    }
+  }
+
+  return rows.map((r: Record<string,unknown>) => ({
+    title: r.title as string,
+    category: r.category as string,
+    content: r.content as string,
+    source_repo: r.source_repo as string
+  }));
+}
+
 export async function getBuddyKnowledgeStats(): Promise<{ total: number; repos: { repo: string; count: number }[] }> {
   const db = getPool();
   const [countRes, repoRes] = await Promise.all([
