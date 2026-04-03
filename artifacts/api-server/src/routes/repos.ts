@@ -1102,6 +1102,8 @@ const DEFAULT_TRAIN_REPOS = [
   "adminsairolotech-bit/multi-ai-system_prompts_leaks",
   "adminsairolotech-bit/second-brain-skills",
   "adminsairolotech-bit/HowToHunt",
+  "adminsairolotech-bit/sai-rolotech-smart-engines",
+  "adminsairolotech-bit/super-pro",
 ];
 
 // POST /repos/train-buddy — start training job

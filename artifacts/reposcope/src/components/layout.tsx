@@ -1,6 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
-import { GitCompare, Home, Activity, History, BookOpen, Settings, Github, Archive, Brain } from "lucide-react";
+import { GitCompare, Home, Activity, History, BookOpen, Settings, Github, Archive, Brain, Upload } from "lucide-react";
 import { AiChat } from "@/components/ai-chat";
 
 const navItems = [
@@ -11,6 +11,7 @@ const navItems = [
   { href: "/skills", label: "Skills", icon: BookOpen },
   { href: "/deep-archive", label: "Deep Archive", icon: Archive },
   { href: "/train-buddy", label: "Train Buddy", icon: Brain },
+  { href: "/play-store", label: "Play Store", icon: Upload },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

@@ -11,6 +11,7 @@ import Skills from "@/pages/skills";
 import Settings from "@/pages/settings";
 import DeepArchive from "@/pages/deep-archive";
 import TrainBuddy from "@/pages/train-buddy";
+import PlayStore from "@/pages/play-store";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -32,6 +33,7 @@ function Router() {
       <Route path="/settings" component={Settings} />
       <Route path="/deep-archive" component={DeepArchive} />
       <Route path="/train-buddy" component={TrainBuddy} />
+      <Route path="/play-store" component={PlayStore} />
       <Route component={NotFound} />
     </Switch>
   );
