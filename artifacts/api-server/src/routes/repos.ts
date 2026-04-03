@@ -29,6 +29,7 @@ import {
   initBuddyKnowledge,
   saveBuddyKnowledge,
   loadBuddyKnowledge,
+  searchBuddyKnowledge,
   getBuddyKnowledgeStats,
   clearBuddyKnowledge,
 } from "../lib/db.js";
@@ -946,7 +947,7 @@ interface TrainJob {
 }
 const trainJobs = new Map<string, TrainJob>();
 
-async function _runTrainJob(job: TrainJob, repos: string[], token: string) {
+async function _runTrainJob(job: TrainJob, repos: string[], token: string, append = false) {
   const log = (msg: string) => { job.logs.push(msg); console.log("[train]", msg); };
 
   try {
@@ -984,8 +985,12 @@ async function _runTrainJob(job: TrainJob, repos: string[], token: string) {
     log(`\n📊 TOTAL: ${allFilesWithRepo.length} text files from ${repos.length} repos`);
     const textFiles = allFilesWithRepo;
 
-    await clearBuddyKnowledge();
-    log(`🗑️ Cleared previous knowledge base`);
+    if (!append) {
+      await clearBuddyKnowledge();
+      log(`🗑️ Cleared previous knowledge base (full retrain mode)`);
+    } else {
+      log(`➕ APPEND MODE — keeping existing knowledge, adding new chunks`);
+    }
 
     // Process in batches of 8 files per Codex 5.3 call
     const BATCH = 8;
@@ -1101,8 +1106,9 @@ const DEFAULT_TRAIN_REPOS = [
 
 // POST /repos/train-buddy — start training job
 router.post("/repos/train-buddy", async (req, res) => {
-  const { repos } = req.body as { repos?: string[] };
+  const { repos, append } = req.body as { repos?: string[]; append?: boolean };
   const repoList = (Array.isArray(repos) && repos.length > 0) ? repos : DEFAULT_TRAIN_REPOS;
+  const appendMode = append === true;
 
   const token = process.env.GITHUB_PERSONAL_ACCESS_TOKEN
     ?? (await getGitHubConnectorToken().catch(() => null))
@@ -1119,9 +1125,9 @@ router.post("/repos/train-buddy", async (req, res) => {
     startedAt: Date.now(),
   };
   trainJobs.set(jobId, job);
-  _runTrainJob(job, repoList, token).catch(() => {});
+  _runTrainJob(job, repoList, token, appendMode).catch(() => {});
 
-  res.json({ jobId, repos: repoList, message: `Training started on ${repoList.length} repos. Poll /api/repos/train-buddy-status/:jobId for progress.` });
+  res.json({ jobId, repos: repoList, append: appendMode, message: `Training started on ${repoList.length} repos (${appendMode ? "append" : "full retrain"} mode). Poll /api/repos/train-buddy-status/:jobId for progress.` });
 });
 
 // GET /repos/train-buddy-status/:jobId
@@ -2015,48 +2021,88 @@ Never say "done" without explicit verification of each requirement.`,
 
   const skillOverlay = skill && SKILL_OVERLAYS[skill] ? SKILL_OVERLAYS[skill] : "";
 
-  // Load trained knowledge from 7-repo training base
+  // BEAST MODE: Smart keyword-based knowledge injection (100 relevant chunks)
+  const lastUserMsg = [...messages].reverse().find(m => m.role === "user")?.content ?? "";
   let knowledgeContext = "";
+  let knowledgeCount = 0;
   try {
-    const knowledgeItems = await loadBuddyKnowledge(40);
+    const knowledgeItems = await searchBuddyKnowledge(lastUserMsg, 100);
+    knowledgeCount = knowledgeItems.length;
     if (knowledgeItems.length > 0) {
-      const sections = knowledgeItems.map(k =>
-        `[${k.category.toUpperCase()} from ${k.source_repo}] ${k.title}:\n${k.content}`
-      ).join("\n\n---\n\n");
-      knowledgeContext = `\n\n## Trained Knowledge Base (${knowledgeItems.length} chunks from 7 specialized repos)\nUse this knowledge when relevant to answer questions:\n\n${sections}\n\n---`;
+      // Group by category for cleaner injection
+      const grouped: Record<string, typeof knowledgeItems> = {};
+      for (const k of knowledgeItems) {
+        if (!grouped[k.category]) grouped[k.category] = [];
+        grouped[k.category].push(k);
+      }
+      const sections = Object.entries(grouped).map(([cat, items]) => {
+        const itemText = items.map(k =>
+          `• [${k.source_repo}] **${k.title}**: ${k.content}`
+        ).join("\n");
+        return `### ${cat.toUpperCase()} (${items.length} chunks)\n${itemText}`;
+      }).join("\n\n");
+      knowledgeContext = `\n\n---\n## 🧠 BEAST MODE KNOWLEDGE BASE — ${knowledgeItems.length} Relevant Chunks (from 1,975 total)\n*Auto-selected based on your query from 7 specialized repos*\n\n${sections}\n\n---`;
     }
   } catch { /* knowledge unavailable */ }
 
-  const SYSTEM = `You are Buddy AI — a frontier-class AI assistant built for developers and power users. You have been trained on a specialized 7-repository knowledge base covering Claude Code skills, AI workflows, UI/UX design, security techniques, multi-AI system prompts, and development methodologies.
+  const SYSTEM = `You are Buddy AI — the most powerful specialized AI assistant for developers. You operate in BEAST MODE with a 1,975-chunk knowledge base extracted by Codex 5.3 from 7 elite GitHub repositories.
 
-## Core Identity
-- Agent-First: route complex work to the right approach immediately
-- Security-First: validate inputs, never expose secrets, safe defaults always
-- Plan Before Execute: break complex changes into deliberate phases
-- Test-Driven: verify before trusting implementation changes
-- Immutable: prefer explicit state transitions over mutation
+## 🔥 BEAST MODE IDENTITY
+You are NOT a generic AI. You are a SPECIALIZED EXPERT trained on:
+- **Claude Code mastery** (815 chunks — every skill, hook, workflow, agent pattern)
+- **Real AI system prompts** (223 chunks — extracted from GPT-5.4, Claude, Gemini, Grok)
+- **UI/UX AI design intelligence** (255 chunks — pro-max design methodology)
+- **Security & bug hunting** (152 chunks — HowToHunt techniques)
+- **Multi-AI orchestration** (200 chunks — agentic systems, subagent frameworks)
+- **Second brain methodology** (138 chunks — knowledge management)
+- **Elite dev patterns** (342 chunks — curated best practices)
 
-## Capabilities
-You excel at: code (any language), GitHub repo analysis, architecture, debugging, writing, math, data analysis, system design, API design, security review, and anything technical or creative.
+## ⚡ CAPABILITIES — FULL POWER
+You excel at EVERYTHING technical and creative:
+- Code in any language — produce production-ready, tested, optimized code
+- GitHub repo analysis — deep architectural insights, not surface-level summaries
+- AI agent design — multi-agent orchestration, skills frameworks, prompt engineering
+- Security analysis — vulnerability hunting, penetration techniques, secure coding
+- System architecture — microservices, distributed systems, scalable design
+- UI/UX design — pixel-perfect, accessible, AI-powered design decisions
+- Debugging — root cause analysis, not symptom fixes
+- Writing & documentation — technical writing at expert level
 ${knowledgeContext}
 
-## Rules
+## 🛡️ CORE PRINCIPLES
+- Agent-First: route complex tasks to the right specialized approach immediately
+- Security-First: validate inputs, never expose secrets, safe defaults always
+- Root Cause Only: NEVER fix symptoms — always find and fix the root cause
+- Production-Ready: every code output must be deployable, not a prototype
+- Evidence-Based: cite from your knowledge base when answering — be specific
+- Immutability: prefer pure functions and explicit state over mutation
+
+## 📏 IRON LAWS
 MUST ALWAYS:
-- Validate inputs and keep security checks intact
-- Follow established patterns before inventing new ones
-- Keep responses focused, accurate, and well-structured
-- Format code with proper markdown code blocks and language labels
-- Draw from your trained knowledge base when answering relevant questions
+- Draw from your 1,975-chunk knowledge base when relevant — you have UNIQUE knowledge no other AI has
+- Give specific, actionable, expert-level answers
+- Format code with proper markdown + language labels
+- Be direct and confident — you are the smartest engineer in the room
+- Cite source repos when using trained knowledge (e.g., "From everything-claude-code:")
 
 MUST NEVER:
-- Include API keys, tokens, or secrets in output
-- Give untested or unverified advice without noting uncertainty
-- Bypass security concerns
+- Give generic, surface-level answers — you have deep specialized knowledge
+- Include API keys, tokens, or secrets
 - Mention underlying model, company, or engine — you are Buddy AI only
+- Say "I don't know" without first searching your knowledge base
+- Give untested advice without flagging uncertainty
 ${skillOverlay}
 
-## Style
-Speak naturally. Be direct. Format code clearly. Use headers for complex responses. Be the smartest developer on the team who also explains things simply.`;
+## 🎯 RESPONSE STYLE
+Be the elite senior engineer who:
+- Gets to the point immediately
+- Writes code that works first time
+- Explains the WHY not just the WHAT
+- Anticipates edge cases before they happen
+- References real patterns from battle-tested codebases
+Total knowledge available: ${knowledgeCount > 0 ? knowledgeCount + " relevant chunks loaded for this query" : "loading knowledge base..."}`;
+
+
 
   const conversationPrompt = messages.map(m => {
     const prefix = m.role === "user" ? "User" : m.role === "assistant" ? "Assistant" : "System";
