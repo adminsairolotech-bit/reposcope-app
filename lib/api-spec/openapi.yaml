@@ -1,0 +1,576 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 1.0.0
+  description: RepoScope - GitHub repository intelligence platform API
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: repos
+    description: Repository intelligence operations
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /repos/trending:
+    get:
+      operationId: getTrendingRepos
+      tags: [repos]
+      summary: Get trending repositories
+      responses:
+        "200":
+          description: Trending repos list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrendingReposResponse"
+
+  /repos/fetch:
+    post:
+      operationId: fetchRepos
+      tags: [repos]
+      summary: Fetch metadata for repositories
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FetchReposBody"
+      responses:
+        "200":
+          description: Repo metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FetchReposResponse"
+
+  /repos/compare:
+    post:
+      operationId: compareRepos
+      tags: [repos]
+      summary: Compare repositories side by side with scoring
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompareReposBody"
+      responses:
+        "200":
+          description: Comparison result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompareReposResponse"
+
+  /repos/events:
+    post:
+      operationId: getRepoEvents
+      tags: [repos]
+      summary: Fetch real-time GitHub events for repositories
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RepoEventsBody"
+      responses:
+        "200":
+          description: Events response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepoEventsResponse"
+
+  /repos/history:
+    post:
+      operationId: getHistory
+      tags: [repos]
+      summary: Retrieve past analysis history
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HistoryQueryBody"
+      responses:
+        "200":
+          description: History records
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HistoryResponse"
+
+  /repos/history/{id}:
+    delete:
+      operationId: deleteHistory
+      tags: [repos]
+      summary: Delete a history entry
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeleteResponse"
+
+  /repos/skills:
+    get:
+      operationId: listSkills
+      tags: [repos]
+      summary: List skills library
+      responses:
+        "200":
+          description: Skills list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillsResponse"
+
+  /repos/skills/stats:
+    get:
+      operationId: getSkillsStats
+      tags: [repos]
+      summary: Get skills library stats
+      responses:
+        "200":
+          description: Skills stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SkillsStatsResponse"
+
+  /repos/gemini-pool-status:
+    get:
+      operationId: getGeminiPoolStatus
+      tags: [repos]
+      summary: Get Gemini key pool status
+      responses:
+        "200":
+          description: Gemini pool status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeminiPoolStatus"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+        service:
+          type: string
+        version:
+          type: string
+        timestamp:
+          type: string
+      required:
+        - status
+
+    RepoInfo:
+      type: object
+      properties:
+        id:
+          type: number
+        name:
+          type: string
+        fullName:
+          type: string
+        description:
+          type: string
+        url:
+          type: string
+        htmlUrl:
+          type: string
+        stars:
+          type: number
+        forks:
+          type: number
+        openIssues:
+          type: number
+        watchers:
+          type: number
+        language:
+          type: string
+        topics:
+          type: array
+          items:
+            type: string
+        license:
+          type: string
+        defaultBranch:
+          type: string
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+        pushedAt:
+          type: string
+        size:
+          type: number
+        homepage:
+          type: string
+        isArchived:
+          type: boolean
+        platform:
+          type: string
+        isPrivate:
+          type: boolean
+        isFork:
+          type: boolean
+        ownerAvatarUrl:
+          type: string
+        ownerLogin:
+          type: string
+      required:
+        - id
+        - name
+        - fullName
+        - stars
+        - forks
+        - openIssues
+
+    FetchReposBody:
+      type: object
+      properties:
+        repos:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          maxItems: 50
+        token:
+          type: string
+        platform:
+          type: string
+      required:
+        - repos
+
+    FetchReposResponse:
+      type: object
+      properties:
+        repos:
+          type: array
+          items:
+            $ref: "#/components/schemas/RepoInfo"
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              slug:
+                type: string
+              error:
+                type: string
+      required:
+        - repos
+        - errors
+
+    CompareReposBody:
+      type: object
+      properties:
+        repos:
+          type: array
+          items:
+            type: string
+        token:
+          type: string
+        platform:
+          type: string
+      required:
+        - repos
+
+    CompareScore:
+      type: object
+      properties:
+        slug:
+          type: string
+        repo:
+          $ref: "#/components/schemas/RepoInfo"
+        score:
+          type: number
+        breakdown:
+          type: object
+          properties:
+            stars:
+              type: number
+            forks:
+              type: number
+            issues:
+              type: number
+            recency:
+              type: number
+            size:
+              type: number
+          required:
+            - stars
+            - forks
+            - issues
+            - recency
+            - size
+      required:
+        - slug
+        - repo
+        - score
+        - breakdown
+
+    CompareReposResponse:
+      type: object
+      properties:
+        ranked:
+          type: array
+          items:
+            $ref: "#/components/schemas/CompareScore"
+        errors:
+          type: array
+          items:
+            type: object
+      required:
+        - ranked
+        - errors
+
+    TrendingRepo:
+      type: object
+      properties:
+        slug:
+          type: string
+        category:
+          type: string
+      required:
+        - slug
+        - category
+
+    TrendingReposResponse:
+      type: object
+      properties:
+        repos:
+          type: array
+          items:
+            $ref: "#/components/schemas/TrendingRepo"
+      required:
+        - repos
+
+    RepoEventsBody:
+      type: object
+      properties:
+        repos:
+          type: array
+          items:
+            type: string
+        token:
+          type: string
+        perPage:
+          type: number
+      required:
+        - repos
+
+    RepoEvent:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        repo:
+          type: string
+        actor:
+          type: string
+        actorAvatar:
+          type: string
+        createdAt:
+          type: string
+        payload:
+          type: object
+      required:
+        - id
+        - type
+        - repo
+        - actor
+        - createdAt
+
+    RepoEventsResponse:
+      type: object
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/RepoEvent"
+        errors:
+          type: array
+          items:
+            type: object
+      required:
+        - events
+        - errors
+
+    HistoryQueryBody:
+      type: object
+      properties:
+        type:
+          type: string
+        limit:
+          type: number
+        offset:
+          type: number
+      required: []
+
+    HistoryRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        repos:
+          type: array
+          items:
+            type: string
+        summary:
+          type: string
+        createdAt:
+          type: string
+      required:
+        - id
+        - type
+        - repos
+        - summary
+        - createdAt
+
+    HistoryResponse:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/HistoryRecord"
+        total:
+          type: number
+      required:
+        - records
+        - total
+
+    DeleteResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+      required:
+        - ok
+
+    Skill:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        difficulty:
+          type: string
+        estimatedTime:
+          type: string
+        content:
+          type: string
+        createdAt:
+          type: string
+      required:
+        - id
+        - title
+        - description
+        - category
+
+    SkillsResponse:
+      type: object
+      properties:
+        skills:
+          type: array
+          items:
+            $ref: "#/components/schemas/Skill"
+        total:
+          type: number
+      required:
+        - skills
+        - total
+
+    SkillsStatsResponse:
+      type: object
+      properties:
+        total:
+          type: number
+        byCategory:
+          type: object
+          additionalProperties:
+            type: number
+        byDifficulty:
+          type: object
+          additionalProperties:
+            type: number
+      required:
+        - total
+        - byCategory
+        - byDifficulty
+
+    GeminiKeyStatus:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        status:
+          type: string
+        cooldownUntil:
+          type: string
+      required:
+        - id
+        - status
+
+    GeminiPoolStatus:
+      type: object
+      properties:
+        engine:
+          type: string
+        totalKeys:
+          type: number
+        readyKeys:
+          type: number
+        coolingKeys:
+          type: number
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/GeminiKeyStatus"
+      required:
+        - engine
+        - totalKeys
+        - readyKeys
+        - coolingKeys
+        - keys
