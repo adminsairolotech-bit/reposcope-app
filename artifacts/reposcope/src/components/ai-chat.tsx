@@ -1,25 +1,241 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, MessageSquare, Send, X } from "lucide-react";
+import {
+  Loader2, MessageSquare, Send, X, Copy, Check, Eye, Globe, Github,
+  Zap, Brain, ChevronDown, ChevronUp, Maximize2
+} from "lucide-react";
 import { getApiKey } from "@workspace/api-client-react";
 
-export function AiChat() {
-  const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
-  const [input, setInput] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+type ToolName = "web_fetch" | "github_search" | "artifact_hint" | null;
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+  tool?: ToolName;
+  isStreaming?: boolean;
+}
+
+// ── Code block parser ──────────────────────────────────────────────────────────
+function parseCodeBlocks(text: string): Array<{ type: "text" | "code"; content: string; lang?: string }> {
+  const parts: Array<{ type: "text" | "code"; content: string; lang?: string }> = [];
+  const regex = /```(\w*)\n?([\s\S]*?)```/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ type: "text", content: text.slice(lastIndex, match.index) });
+    }
+    parts.push({ type: "code", lang: match[1] || "text", content: match[2] });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    parts.push({ type: "text", content: text.slice(lastIndex) });
+  }
+  return parts;
+}
+
+// ── Inline markdown (bold, italic, inline code, links) ─────────────────────────
+function renderInline(text: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  const re = /(\*\*(.+?)\*\*|\*(.+?)\*|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\))/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let key = 0;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(<span key={key++}>{text.slice(last, m.index)}</span>);
+    if (m[2]) parts.push(<strong key={key++}>{m[2]}</strong>);
+    else if (m[3]) parts.push(<em key={key++}>{m[3]}</em>);
+    else if (m[4]) parts.push(<code key={key++} className="bg-muted px-1 py-0.5 rounded text-xs font-mono">{m[4]}</code>);
+    else if (m[5]) parts.push(<a key={key++} href={m[6]} target="_blank" rel="noreferrer" className="text-blue-400 underline">{m[5]}</a>);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) parts.push(<span key={key++}>{text.slice(last)}</span>);
+  return parts;
+}
+
+// ── Text renderer with headers, bullets, numbered lists ───────────────────────
+function TextRenderer({ text }: { text: string }) {
+  const lines = text.split("\n");
+  const elements: React.ReactNode[] = [];
+  let listItems: string[] = [];
+  let numItems: string[] = [];
+  let listKey = 0;
+
+  const flushList = () => {
+    if (listItems.length) {
+      elements.push(
+        <ul key={`ul-${listKey++}`} className="list-disc list-inside my-1 space-y-0.5">
+          {listItems.map((li, i) => <li key={i} className="text-sm">{renderInline(li)}</li>)}
+        </ul>
+      );
+      listItems = [];
+    }
+    if (numItems.length) {
+      elements.push(
+        <ol key={`ol-${listKey++}`} className="list-decimal list-inside my-1 space-y-0.5">
+          {numItems.map((li, i) => <li key={i} className="text-sm">{renderInline(li)}</li>)}
+        </ol>
+      );
+      numItems = [];
+    }
   };
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+  lines.forEach((line, i) => {
+    if (/^#{1,3}\s/.test(line)) {
+      flushList();
+      const level = (line.match(/^(#{1,3})/) ?? ["#"])[0].length;
+      const content = line.replace(/^#{1,3}\s/, "");
+      const cls = level === 1 ? "text-base font-bold mt-3 mb-1" : level === 2 ? "text-sm font-semibold mt-2 mb-0.5" : "text-sm font-medium mt-1";
+      elements.push(<div key={i} className={cls}>{renderInline(content)}</div>);
+    } else if (/^[-*•]\s/.test(line)) {
+      numItems.length && flushList();
+      listItems.push(line.replace(/^[-*•]\s/, ""));
+    } else if (/^\d+\.\s/.test(line)) {
+      listItems.length && flushList();
+      numItems.push(line.replace(/^\d+\.\s/, ""));
+    } else if (line.trim() === "") {
+      flushList();
+      elements.push(<div key={i} className="h-1" />);
+    } else {
+      flushList();
+      elements.push(<p key={i} className="text-sm leading-relaxed">{renderInline(line)}</p>);
+    }
+  });
+  flushList();
+  return <div className="space-y-0.5">{elements}</div>;
+}
+
+// ── Code block with copy + HTML preview ───────────────────────────────────────
+function CodeBlock({ lang, code, onPreview }: { lang: string; code: string; onPreview?: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const isHtml = lang === "html" || lang === "htm";
+
+  const copy = () => {
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="my-2 rounded-lg overflow-hidden border border-border/50">
+      <div className="flex items-center justify-between px-3 py-1.5 bg-muted/80 text-xs text-muted-foreground">
+        <span className="font-mono font-medium text-blue-400">{lang || "code"}</span>
+        <div className="flex gap-1.5">
+          {isHtml && onPreview && (
+            <button onClick={onPreview} className="flex items-center gap-1 hover:text-green-400 transition-colors">
+              <Eye className="h-3 w-3" /> Preview
+            </button>
+          )}
+          <button onClick={copy} className="flex items-center gap-1 hover:text-foreground transition-colors">
+            {copied ? <Check className="h-3 w-3 text-green-400" /> : <Copy className="h-3 w-3" />}
+            {copied ? "Copied!" : "Copy"}
+          </button>
+        </div>
+      </div>
+      <pre className="p-3 bg-black/40 overflow-x-auto text-xs font-mono text-green-300 leading-relaxed max-h-64">
+        {code}
+      </pre>
+    </div>
+  );
+}
+
+// ── Tool use badge ─────────────────────────────────────────────────────────────
+function ToolBadge({ tool }: { tool: ToolName }) {
+  if (!tool) return null;
+  const config: Record<string, { icon: React.ReactNode; label: string; color: string }> = {
+    web_fetch:     { icon: <Globe className="h-3 w-3" />,   label: "Fetching web",      color: "text-blue-400" },
+    github_search: { icon: <Github className="h-3 w-3" />,  label: "Searching GitHub",  color: "text-purple-400" },
+    artifact_hint: { icon: <Zap className="h-3 w-3" />,     label: "Artifact mode",     color: "text-yellow-400" },
+  };
+  const c = config[tool];
+  if (!c) return null;
+  return (
+    <div className={`inline-flex items-center gap-1 text-xs ${c.color} opacity-75 mb-1`}>
+      {c.icon} <span>{c.label}...</span>
+    </div>
+  );
+}
+
+// ── Message renderer ───────────────────────────────────────────────────────────
+function MessageRenderer({ msg, onPreviewHtml }: { msg: Message; onPreviewHtml: (html: string) => void }) {
+  const parts = parseCodeBlocks(msg.content);
+  return (
+    <div className="flex flex-col gap-0.5">
+      {msg.tool && <ToolBadge tool={msg.tool} />}
+      {parts.map((part, i) =>
+        part.type === "code" ? (
+          <CodeBlock
+            key={i}
+            lang={part.lang ?? ""}
+            code={part.content}
+            onPreview={
+              (part.lang === "html" || part.lang === "htm")
+                ? () => onPreviewHtml(part.content)
+                : undefined
+            }
+          />
+        ) : (
+          <TextRenderer key={i} text={part.content} />
+        )
+      )}
+      {msg.isStreaming && <span className="inline-block w-1.5 h-3.5 bg-current animate-pulse ml-0.5 align-middle" />}
+    </div>
+  );
+}
+
+// ── HTML Preview Modal ─────────────────────────────────────────────────────────
+function HtmlPreviewModal({ html, onClose }: { html: string; onClose: () => void }) {
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  useEffect(() => () => URL.revokeObjectURL(url), [url]);
+
+  return (
+    <div className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center p-4">
+      <div className="bg-background rounded-xl border shadow-2xl w-full max-w-3xl h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between px-4 py-2 border-b">
+          <span className="text-sm font-medium flex items-center gap-2">
+            <Eye className="h-4 w-4 text-green-400" /> HTML Preview
+          </span>
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+        <iframe src={url} className="flex-1 rounded-b-xl" sandbox="allow-scripts" title="Artifact Preview" />
+      </div>
+    </div>
+  );
+}
+
+// ── Thinking toggle ────────────────────────────────────────────────────────────
+function ThinkingIndicator({ active }: { active: boolean }) {
+  if (!active) return null;
+  return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
+      <Brain className="h-3.5 w-3.5 text-violet-400 animate-pulse" />
+      <span>Buddy is thinking...</span>
+    </div>
+  );
+}
+
+// ── Main AiChat component ──────────────────────────────────────────────────────
+export function AiChat() {
+  const [isOpen, setIsOpen] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [input, setInput] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
+  useEffect(() => { scrollToBottom(); }, [messages, scrollToBottom]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,8 +243,10 @@ export function AiChat() {
 
     const userMessage = input.trim();
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
+    const newMessages: Message[] = [...messages, { role: "user", content: userMessage }];
+    setMessages(newMessages);
     setIsLoading(true);
+    setIsThinking(true);
 
     try {
       const token = getApiKey() || undefined;
@@ -36,117 +254,206 @@ export function AiChat() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
-          messages: [...messages, { role: "user", content: userMessage }],
+          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
         }),
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to send message");
-      }
+      if (!response.ok || !response.body) throw new Error("Request failed");
 
-      if (!response.body) {
-        throw new Error("No response body");
-      }
-
-      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+      const assistantIdx = newMessages.length;
+      setMessages(prev => [...prev, { role: "assistant", content: "", isStreaming: true }]);
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let done = false;
+      let buffer = "";
       let text = "";
+      let detectedTool: ToolName = null;
 
-      while (!done) {
-        const { value, done: doneReading } = await reader.read();
-        done = doneReading;
-        if (value) {
-          const chunk = decoder.decode(value, { stream: true });
-          text += chunk;
-          setMessages((prev) => {
-            const newMessages = [...prev];
-            newMessages[newMessages.length - 1].content = text;
-            return newMessages;
-          });
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const payload = JSON.parse(line.slice(6));
+            if (payload.tool) {
+              detectedTool = payload.tool as ToolName;
+              setIsThinking(false);
+              setMessages(prev => {
+                const updated = [...prev];
+                if (updated[assistantIdx]) {
+                  updated[assistantIdx] = { ...updated[assistantIdx], tool: detectedTool };
+                }
+                return updated;
+              });
+            } else if (payload.delta) {
+              setIsThinking(false);
+              text += payload.delta;
+              setMessages(prev => {
+                const updated = [...prev];
+                if (updated[assistantIdx]) {
+                  updated[assistantIdx] = { ...updated[assistantIdx], content: text, isStreaming: true };
+                }
+                return updated;
+              });
+            } else if (payload.done || payload.error) {
+              setMessages(prev => {
+                const updated = [...prev];
+                if (updated[assistantIdx]) {
+                  updated[assistantIdx] = { ...updated[assistantIdx], isStreaming: false };
+                }
+                return updated;
+              });
+            }
+          } catch { /* skip malformed event */ }
         }
       }
-    } catch (error) {
-      console.error(error);
-      setMessages((prev) => [
+    } catch (err) {
+      console.error(err);
+      setMessages(prev => [
         ...prev,
-        { role: "assistant", content: "Error communicating with AI. Please check your API key in Settings." },
+        { role: "assistant", content: "**Error**: Could not reach Buddy AI. Add Gemini keys in Settings." },
       ]);
     } finally {
       setIsLoading(false);
+      setIsThinking(false);
     }
   };
+
+  const chatWidth = isExpanded ? "w-[700px]" : "w-[420px]";
+  const chatHeight = isExpanded ? "h-[85vh]" : "h-[620px]";
 
   if (!isOpen) {
     return (
       <Button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-lg"
+        className="fixed bottom-6 right-6 h-14 w-14 rounded-full shadow-xl bg-gradient-to-br from-violet-600 to-blue-600 hover:from-violet-500 hover:to-blue-500"
         size="icon"
       >
-        <MessageSquare className="h-6 w-6" />
+        <Brain className="h-6 w-6" />
       </Button>
     );
   }
 
   return (
-    <Card className="fixed bottom-6 right-6 w-[400px] h-[600px] flex flex-col shadow-2xl z-50">
-      <CardHeader className="flex flex-row items-center justify-between py-3 px-4 border-b">
-        <CardTitle className="text-sm font-medium flex items-center gap-2">
-          <MessageSquare className="h-4 w-4" /> Buddy AI Chat
-        </CardTitle>
-        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setIsOpen(false)}>
-          <X className="h-4 w-4" />
-        </Button>
-      </CardHeader>
-      <CardContent className="flex-1 p-0 overflow-hidden">
-        <ScrollArea className="h-full p-4">
-          <div className="flex flex-col gap-4">
-            {messages.length === 0 ? (
-              <div className="text-center text-sm text-muted-foreground mt-10">
-                Ask me about repositories, compare features, or summarize events.
-              </div>
-            ) : (
-              messages.map((msg, i) => (
-                <div
-                  key={i}
-                  className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-                >
-                  <div
-                    className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${
-                      msg.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted text-foreground"
-                    }`}
-                  >
-                    {msg.content || <Loader2 className="h-4 w-4 animate-spin" />}
+    <>
+      {previewHtml && (
+        <HtmlPreviewModal html={previewHtml} onClose={() => setPreviewHtml(null)} />
+      )}
+      <Card className={`fixed bottom-6 right-6 ${chatWidth} ${chatHeight} flex flex-col shadow-2xl z-50 transition-all duration-200 border-violet-500/20`}>
+        <CardHeader className="flex flex-row items-center justify-between py-2.5 px-4 border-b bg-gradient-to-r from-violet-950/50 to-blue-950/50 rounded-t-xl">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <Brain className="h-4 w-4 text-violet-400" />
+            <span className="bg-gradient-to-r from-violet-400 to-blue-400 bg-clip-text text-transparent">
+              Buddy AI
+            </span>
+            <span className="text-[10px] font-normal text-muted-foreground bg-violet-500/10 px-1.5 py-0.5 rounded">
+              Claude 4.6-level
+            </span>
+          </CardTitle>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 text-muted-foreground hover:text-foreground"
+              onClick={() => setIsExpanded(e => !e)}
+              title={isExpanded ? "Shrink" : "Expand"}
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+            </Button>
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setIsOpen(false)}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </CardHeader>
+
+        <CardContent className="flex-1 p-0 overflow-hidden">
+          <ScrollArea className="h-full p-4">
+            <div className="flex flex-col gap-4">
+              {messages.length === 0 ? (
+                <div className="text-center mt-8 space-y-3">
+                  <Brain className="h-10 w-10 text-violet-400 mx-auto opacity-60" />
+                  <p className="text-sm text-muted-foreground">
+                    Buddy AI — 2,400+ knowledge chunks
+                  </p>
+                  <div className="grid grid-cols-2 gap-2 mt-4">
+                    {[
+                      "Explain Claude hooks system",
+                      "Write a React component",
+                      "Search GitHub repos for AI agents",
+                      "Create an HTML dashboard",
+                    ].map(q => (
+                      <button
+                        key={q}
+                        onClick={() => setInput(q)}
+                        className="text-left text-xs p-2.5 rounded-lg border border-border/50 hover:border-violet-500/50 hover:bg-violet-500/5 transition-colors text-muted-foreground hover:text-foreground"
+                      >
+                        {q}
+                      </button>
+                    ))}
                   </div>
                 </div>
-              ))
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-        </ScrollArea>
-      </CardContent>
-      <CardFooter className="p-3 border-t">
-        <form onSubmit={handleSubmit} className="flex w-full gap-2">
-          <Input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about repos..."
-            disabled={isLoading}
-            className="flex-1"
-          />
-          <Button type="submit" size="icon" disabled={isLoading || !input.trim()}>
-            <Send className="h-4 w-4" />
-          </Button>
-        </form>
-      </CardFooter>
-    </Card>
+              ) : (
+                messages.map((msg, i) => (
+                  <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                    <div
+                      className={`max-w-[90%] rounded-xl px-3 py-2.5 text-sm ${
+                        msg.role === "user"
+                          ? "bg-gradient-to-br from-violet-600 to-blue-600 text-white"
+                          : "bg-muted/60 text-foreground border border-border/30"
+                      }`}
+                    >
+                      {msg.role === "assistant" && msg.content === "" && !isThinking ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-violet-400" />
+                      ) : msg.role === "assistant" ? (
+                        <MessageRenderer msg={msg} onPreviewHtml={setPreviewHtml} />
+                      ) : (
+                        <span>{msg.content}</span>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+              <ThinkingIndicator active={isThinking} />
+              <div ref={messagesEndRef} />
+            </div>
+          </ScrollArea>
+        </CardContent>
+
+        <CardFooter className="p-3 border-t bg-muted/20">
+          <form onSubmit={handleSubmit} className="flex w-full gap-2">
+            <Input
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              placeholder="Ask Buddy anything..."
+              disabled={isLoading}
+              className="flex-1 bg-background/50 border-border/50 focus:border-violet-500/50 text-sm"
+              onKeyDown={e => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSubmit(e as unknown as React.FormEvent);
+                }
+              }}
+            />
+            <Button
+              type="submit"
+              size="icon"
+              disabled={isLoading || !input.trim()}
+              className="bg-gradient-to-br from-violet-600 to-blue-600 hover:from-violet-500 hover:to-blue-500 shrink-0"
+            >
+              {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </Button>
+          </form>
+        </CardFooter>
+      </Card>
+    </>
   );
 }

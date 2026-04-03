@@ -2046,6 +2046,77 @@ Never say "done" without explicit verification of each requirement.`,
     }
   } catch { /* knowledge unavailable */ }
 
+  // CLAUDE 4.6 UPGRADE NEW: Codex-powered Tool Use — decide & execute before answering
+  let toolContext = "";
+  let activeToolName = "";
+  const githubToken = await getGitHubConnectorToken().catch(() => "") ?? "";
+  try {
+    const toolDecisionPrompt = `You are Buddy AI's tool router. Decide if a tool is needed to best answer this message.
+
+Available tools:
+- web_fetch(url) — Fetch live content from a URL (docs, APIs, news, GitHub pages)
+- github_search(query, type) — Search GitHub (type: "repos", "code", or "issues")
+- artifact_hint(type) — Signal response contains a renderable artifact (type: "html", "react", "python", "code")
+
+User message: "${lastUserMsg.slice(0, 400)}"
+
+Respond ONLY with valid JSON on ONE line — no explanation:
+{"tool":"web_fetch","args":{"url":"https://..."}} OR
+{"tool":"github_search","args":{"query":"...","type":"repos"}} OR
+{"tool":"artifact_hint","args":{"type":"html"}} OR
+{"tool":null}`;
+
+    const toolRaw = await editingComplete(toolDecisionPrompt, 120);
+    let toolCall: { tool: string | null; args?: Record<string, string> } = { tool: null };
+    try {
+      const jsonMatch = toolRaw.match(/\{[\s\S]*\}/);
+      if (jsonMatch) toolCall = JSON.parse(jsonMatch[0]);
+    } catch { /* parse fail — no tool */ }
+
+    if (toolCall.tool) {
+      activeToolName = toolCall.tool;
+      const args = toolCall.args ?? {};
+
+      if (toolCall.tool === "web_fetch" && args.url) {
+        try {
+          const fetchRes = await fetch(args.url, {
+            headers: { "User-Agent": "BuddyAI/4.6 (RepoScope)" },
+            signal: AbortSignal.timeout(8000),
+          });
+          const rawHtml = await fetchRes.text();
+          const clean = rawHtml.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 5000);
+          toolContext = `\n\n## 🌐 LIVE WEB CONTENT — ${args.url}\n\`\`\`\n${clean}\n\`\`\`\n*Integrate this live data into your response.*`;
+        } catch { toolContext = `\n\n## 🌐 WEB FETCH — Could not reach ${args.url}. Answer from knowledge.`; }
+
+      } else if (toolCall.tool === "github_search" && args.query) {
+        try {
+          const endpoint = args.type === "code" ? "code" : args.type === "issues" ? "issues" : "repositories";
+          const ghUrl = `https://api.github.com/search/${endpoint}?q=${encodeURIComponent(args.query)}&per_page=6`;
+          const ghRes = await fetch(ghUrl, {
+            headers: {
+              "Authorization": `token ${githubToken}`,
+              "Accept": "application/vnd.github.v3+json",
+              "User-Agent": "BuddyAI-RepoScope",
+            },
+          });
+          const ghData = await ghRes.json() as { items?: Array<{ full_name?: string; name?: string; description?: string; html_url: string; stargazers_count?: number }> };
+          const found = (ghData.items ?? []).slice(0, 6).map(r =>
+            `• **${r.full_name ?? r.name}** ⭐${r.stargazers_count ?? 0} — ${r.description ?? "No description"}\n  ${r.html_url}`
+          ).join("\n");
+          toolContext = `\n\n## 🔍 GITHUB SEARCH: "${args.query}" (${endpoint})\n${found}\n\n*Use these results to answer accurately.*`;
+        } catch { toolContext = `\n\n## 🔍 GITHUB SEARCH — Query failed. Answer from knowledge.`; }
+
+      } else if (toolCall.tool === "artifact_hint") {
+        toolContext = `\n\n## 🎨 ARTIFACT MODE: ${(args.type ?? "code").toUpperCase()}\nWrite a complete, self-contained, production-quality ${args.type ?? "code"} artifact. Use a single fenced code block with the language tag. The user will be able to preview/run it directly.`;
+      }
+    }
+  } catch { /* tool use failed — proceed without */ }
+
   // CLAUDE 4.6 UPGRADE 2: Extended Thinking — pre-reason before answering
   let thinkingContext = "";
   try {
@@ -2130,17 +2201,22 @@ Structure responses like a world-class senior engineer:
 Knowledge loaded: ${knowledgeCount > 0 ? knowledgeCount + "/200 precision chunks for this query" : "knowledge base loading..."}
 Intelligence level: CLAUDE 4.6 EQUIVALENT`;
 
-  // CLAUDE 4.6 UPGRADE 4: Better conversation context (pass full history)
+  // CLAUDE 4.6 UPGRADE 4: Better conversation context (pass full history + tool results)
   const conversationPrompt = messages.map(m => {
     const prefix = m.role === "user" ? "User" : m.role === "assistant" ? "Buddy" : "System";
     return `${prefix}: ${m.content}`;
-  }).join("\n\n") + "\n\nBuddy (Claude 4.6 level response):";
+  }).join("\n\n") + toolContext + "\n\nBuddy (Claude 4.6 level response):";
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("X-Accel-Buffering", "no");
 
   const onChunk = (chunk: string) => res.write(`data: ${JSON.stringify({ delta: chunk })}\n\n`);
+
+  // Send tool event to frontend so it can show the indicator
+  if (activeToolName) {
+    res.write(`data: ${JSON.stringify({ tool: activeToolName })}\n\n`);
+  }
 
   try {
     // Runtime AI with extended context for Claude 4.6 level responses
