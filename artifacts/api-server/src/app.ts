@@ -70,15 +70,12 @@ app.get("/api/docs", (_req, res) => {
       "DELETE /api/repos/history/:id": "Delete a history entry",
       "GET /api/repos/trending": "Get trending repos list",
       "POST /api/repos/chat": "Buddy AI chat (streaming)",
-      "POST /api/repos/image-generate": "Generate images with Imagen 4",
+      "POST /api/repos/image-generate": "Generate images with Buddy Vision",
       "GET /api/repos/skills": "List skills library",
       "GET /api/repos/skills/stats": "Skills library stats",
       "GET /api/repos/skills/detail": "Get skill detail by id",
-      "GET /api/repos/gemini-pool-status": "Gemini key pool status",
-      "GET /api/repos/admin/gemini-keys": "List Gemini keys (admin)",
-      "POST /api/repos/admin/gemini-keys": "Add Gemini key (admin)",
-      "DELETE /api/repos/admin/gemini-keys/:id": "Deactivate Gemini key (admin)",
-      "POST /api/repos/admin/gemini-keys/sync": "Sync Gemini pool from DB (admin)",
+      "GET /api/repos/engine-status": "AI engine pool status",
+      "POST /api/repos/engine-keys": "Configure AI engine (admin)",
     },
   });
 });

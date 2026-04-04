@@ -95,14 +95,14 @@ class GeminiKeyPool {
     this.clients = fresh.map(k => new GoogleGenerativeAI(k));
     this.cooldown = new Map();
     this.currentIdx = 0;
-    console.log(`[GeminiPool] Pool updated: ${fresh.length} key(s) active`);
+    console.log(`[AIEngine] Pool updated: ${fresh.length} key(s) active`);
   }
 
   get allKeys(): string[] { return [...this.keys]; }
 
   markExhausted(idx: number) {
     this.cooldown.set(idx, Date.now() + this.COOLDOWN_MS);
-    console.warn(`[GeminiPool] Key #${idx + 1} exhausted — cooling down for ${this.COOLDOWN_MS / 1000}s`);
+    console.warn(`[AIEngine] Key #${idx + 1} rate limited — cooling down for ${this.COOLDOWN_MS / 1000}s`);
   }
 
   static isQuotaError(err: unknown): boolean {
@@ -117,7 +117,7 @@ class GeminiKeyPool {
 
     while (tried.size < this.keys.length) {
       const slot = this.getNext();
-      if (!slot) throw new Error("GeminiPool: no keys configured");
+      if (!slot) throw new Error("AIEngine: no keys configured");
       if (tried.has(slot.idx)) break;
       tried.add(slot.idx);
 
@@ -131,7 +131,7 @@ class GeminiKeyPool {
         throw err;
       }
     }
-    throw new Error("GeminiPool: all keys exhausted or quota exceeded");
+    throw new Error("AIEngine: rate limit reached, please try again shortly");
   }
 
   status() {
@@ -165,10 +165,10 @@ export async function syncGeminiPool(): Promise<void> {
     const dbKeys = await loadGeminiKeys();
     if (dbKeys.length > 0) {
       _geminiPool.setKeys(dbKeys);
-      console.log(`[GeminiPool] Loaded ${dbKeys.length} key(s) from DB`);
+      console.log(`[AIEngine] Loaded ${dbKeys.length} key(s) from DB`);
     }
   } catch (err) {
-    console.error("[GeminiPool] syncGeminiPool error:", err);
+    console.error("[AIEngine] sync error:", err);
   }
 }
 

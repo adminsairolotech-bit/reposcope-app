@@ -41,9 +41,9 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-3">
             {geminiQuery.data && (
-              <div className="flex items-center gap-1.5 text-xs border rounded-full px-3 py-1.5" data-testid="gemini-pool-status">
+              <div className="flex items-center gap-1.5 text-xs border rounded-full px-3 py-1.5" data-testid="ai-engine-status">
                 <Zap className={`h-3 w-3 ${geminiQuery.data.readyKeys > 0 ? "text-green-500" : "text-muted-foreground"}`} />
-                <span>{geminiQuery.data.readyKeys}/{geminiQuery.data.totalKeys} Gemini keys ready</span>
+                <span>{geminiQuery.data.readyKeys}/{geminiQuery.data.totalKeys} AI engines active</span>
               </div>
             )}
             {skillsQuery.data && (

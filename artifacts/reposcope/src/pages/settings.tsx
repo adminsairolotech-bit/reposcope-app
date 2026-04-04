@@ -10,7 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-interface GeminiKeyInfo {
+interface AIKeyInfo {
   id: number;
   label: string;
   active: boolean;
@@ -26,11 +26,11 @@ export default function Settings() {
   const [showGithubToken, setShowGithubToken] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  const [geminiKeys, setGeminiKeys] = useState<string[]>(["", "", "", "", "", ""]);
-  const [showGeminiKey, setShowGeminiKey] = useState<boolean[]>([false, false, false, false, false, false]);
-  const [geminiPool, setGeminiPool] = useState<GeminiKeyInfo[]>([]);
+  const [aiKeys, setAiKeys] = useState<string[]>(["", "", "", "", "", ""]);
+  const [showAiKey, setShowAiKey] = useState<boolean[]>([false, false, false, false, false, false]);
+  const [aiPool, setAiPool] = useState<AIKeyInfo[]>([]);
   const [poolReady, setPoolReady] = useState(0);
-  const [savingGemini, setSavingGemini] = useState(false);
+  const [savingKeys, setSavingKeys] = useState(false);
   const [loadingPool, setLoadingPool] = useState(false);
 
   useEffect(() => {
@@ -50,7 +50,7 @@ export default function Settings() {
       ]);
       const adminData = await adminRes.json();
       const statusData = await statusRes.json();
-      setGeminiPool((adminData.keys ?? []).filter((k: GeminiKeyInfo) => k.active));
+      setAiPool((adminData.keys ?? []).filter((k: AIKeyInfo) => k.active));
       setPoolReady(statusData.readyKeys ?? 0);
     } catch { /* ignore */ }
     finally { setLoadingPool(false); }
@@ -68,13 +68,13 @@ export default function Settings() {
     toast({ title: "Settings saved", description: "Your credentials have been saved." });
   };
 
-  const handleSaveGeminiKeys = async () => {
-    const keysToAdd = geminiKeys.filter(k => k.trim().length > 0);
+  const handleSaveAiKeys = async () => {
+    const keysToAdd = aiKeys.filter(k => k.trim().length > 0);
     if (keysToAdd.length === 0) {
-      toast({ title: "No keys entered", description: "Enter at least one Gemini API key.", variant: "destructive" });
+      toast({ title: "No keys entered", description: "Enter at least one AI Engine key.", variant: "destructive" });
       return;
     }
-    setSavingGemini(true);
+    setSavingKeys(true);
     let added = 0;
     for (let i = 0; i < keysToAdd.length; i++) {
       try {
@@ -86,16 +86,16 @@ export default function Settings() {
         if (res.ok) added++;
       } catch { /* ignore */ }
     }
-    setSavingGemini(false);
-    setGeminiKeys(["", "", "", "", "", ""]);
+    setSavingKeys(false);
+    setAiKeys(["", "", "", "", "", ""]);
     await fetchPool();
     toast({
       title: `${added} key${added !== 1 ? "s" : ""} saved`,
-      description: "Gemini keys added to pool and ready to use.",
+      description: "AI Engine keys added to pool and ready to use.",
     });
   };
 
-  const handleRemoveGeminiKey = async (idx: number) => {
+  const handleRemoveKey = async (idx: number) => {
     try {
       await fetch(`${BASE}/api/repos/admin/gemini-keys/${idx}`, { method: "DELETE" });
       await fetchPool();
@@ -105,8 +105,8 @@ export default function Settings() {
     }
   };
 
-  const toggleShowGemini = (i: number) => {
-    setShowGeminiKey(prev => prev.map((v, idx) => idx === i ? !v : v));
+  const toggleShowKey = (i: number) => {
+    setShowAiKey(prev => prev.map((v, idx) => idx === i ? !v : v));
   };
 
   return (
@@ -117,15 +117,15 @@ export default function Settings() {
           <p className="text-sm text-muted-foreground mt-1">Configure API credentials and preferences</p>
         </div>
 
-        {/* ── Gemini Key Pool ─────────────────────────────────────────── */}
+        {/* ── AI Engine Pool ─────────────────────────────────────────── */}
         <div className="border rounded-lg bg-card">
           <div className="p-5 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Zap className="h-4 w-4 text-yellow-500" />
-                <h2 className="text-sm font-medium">Gemini Key Pool</h2>
+                <h2 className="text-sm font-medium">AI Engine Pool</h2>
                 <Badge variant="outline" className={`text-xs ${poolReady > 0 ? "text-green-600 border-green-200" : "text-muted-foreground"}`}>
-                  {poolReady}/{geminiPool.length} ready
+                  {poolReady}/{aiPool.length} ready
                 </Badge>
               </div>
               <Button variant="ghost" size="icon" onClick={fetchPool} disabled={loadingPool} title="Refresh pool">
@@ -133,19 +133,19 @@ export default function Settings() {
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Add up to 6 Gemini API keys from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer" className="underline">aistudio.google.com</a>. Keys rotate automatically when one hits rate limits.
+              Add up to 6 AI Engine keys to power Buddy AI. Keys rotate automatically when one hits rate limits.
             </p>
 
             {/* Active pool */}
-            {geminiPool.length > 0 && (
+            {aiPool.length > 0 && (
               <div className="space-y-2">
                 <Label className="text-xs text-muted-foreground">Active Keys</Label>
-                {geminiPool.map((k) => (
+                {aiPool.map((k) => (
                   <div key={k.id} className="flex items-center gap-2 text-xs bg-muted/40 rounded px-3 py-2">
                     <span className="w-2 h-2 rounded-full flex-shrink-0 bg-green-500" />
                     <span className="font-mono text-muted-foreground flex-1 truncate">{k.label}</span>
                     <span className="text-muted-foreground">used {k.useCount}×</span>
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleRemoveGeminiKey(k.id)} title="Remove key">
+                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => handleRemoveKey(k.id)} title="Remove key">
                       <Trash2 className="h-3 w-3" />
                     </Button>
                   </div>
@@ -154,37 +154,37 @@ export default function Settings() {
             )}
 
             {/* Add new keys */}
-            {geminiPool.length < 6 && (
+            {aiPool.length < 6 && (
               <div className="space-y-2 pt-2">
-                <Label className="text-xs text-muted-foreground">Add Keys ({6 - geminiPool.length} slots remaining)</Label>
-                {geminiKeys.slice(0, Math.max(1, 6 - geminiPool.length)).map((k, i) => (
+                <Label className="text-xs text-muted-foreground">Add Keys ({6 - aiPool.length} slots remaining)</Label>
+                {aiKeys.slice(0, Math.max(1, 6 - aiPool.length)).map((k, i) => (
                   <div key={i} className="flex gap-2">
                     <div className="relative flex-1">
                       <Input
-                        type={showGeminiKey[i] ? "text" : "password"}
+                        type={showAiKey[i] ? "text" : "password"}
                         value={k}
-                        onChange={e => setGeminiKeys(prev => prev.map((v, idx) => idx === i ? e.target.value : v))}
-                        placeholder={`Gemini API Key ${geminiPool.length + i + 1}`}
+                        onChange={e => setAiKeys(prev => prev.map((v, idx) => idx === i ? e.target.value : v))}
+                        placeholder={`AI Engine Key ${aiPool.length + i + 1}`}
                         className="pr-10 font-mono text-sm"
                       />
                       <button
                         type="button"
-                        onClick={() => toggleShowGemini(i)}
+                        onClick={() => toggleShowKey(i)}
                         className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                       >
-                        {showGeminiKey[i] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        {showAiKey[i] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
                     </div>
                   </div>
                 ))}
-                <Button onClick={handleSaveGeminiKeys} disabled={savingGemini} size="sm" className="gap-2 mt-1">
+                <Button onClick={handleSaveAiKeys} disabled={savingKeys} size="sm" className="gap-2 mt-1">
                   <Plus className="h-3.5 w-3.5" />
-                  {savingGemini ? "Saving..." : "Add to Pool"}
+                  {savingKeys ? "Saving..." : "Add to Pool"}
                 </Button>
               </div>
             )}
 
-            {geminiPool.length >= 6 && (
+            {aiPool.length >= 6 && (
               <p className="text-xs text-green-600 font-medium">Pool full — 6/6 keys active.</p>
             )}
           </div>
@@ -275,11 +275,11 @@ export default function Settings() {
         </Button>
 
         <div className="border rounded-lg p-4 bg-muted/50 space-y-2">
-          <h3 className="text-xs font-medium">AI Engine Priority</h3>
+          <h3 className="text-xs font-medium">Buddy AI Engine Tiers</h3>
           <div className="text-xs text-muted-foreground space-y-1">
-            <p>🟡 <strong>Gemini Pool</strong> — Runtime AI (chat, analyze, compare) — up to 6 keys rotate automatically</p>
-            <p>🟠 <strong>OpenRouter</strong> — Fallback engine (DeepSeek R1, GPT-4.1, Qwen 2.5 Coder)</p>
-            <p>🔵 <strong>Replit Integration</strong> — Code synthesis &amp; editing features</p>
+            <p>⚡ <strong>Primary Engine</strong> — Runtime AI (chat, analyze, compare) — up to 6 keys rotate automatically</p>
+            <p>🔄 <strong>Fallback Engine</strong> — Secondary routing when primary is rate-limited</p>
+            <p>🔵 <strong>Synthesis Engine</strong> — Code synthesis &amp; deep editing features</p>
           </div>
         </div>
       </div>
