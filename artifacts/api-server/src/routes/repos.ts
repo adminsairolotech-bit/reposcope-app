@@ -1106,6 +1106,7 @@ const DEFAULT_TRAIN_REPOS = [
   "adminsairolotech-bit/super-pro",
   "adminsairolotech-bit/kagglehub",
   "adminsairolotech-bit/openclaw.ai-NEW-",
+  "adminsairolotech-bit/oh-my-codex",
 ];
 
 // POST /repos/train-buddy — start training job
@@ -2214,6 +2215,7 @@ You are NOT a generic AI. You are a DEEPLY TRAINED SPECIALIST with:
 - **Deep analysis systems** (super-pro — advanced analytical frameworks)
 - **Kaggle ML ecosystem** (kagglehub — datasets, models, kernels, Kaggle API patterns)
 - **OpenClaw AI assistant platform** (openclaw.ai-NEW- — personal AI gateway, 20+ messaging channels, Skills engine, multi-platform TypeScript/Swift/Kotlin)
+- **Oh My Codex / OMX** (oh-my-codex — Codex workflow layer, multi-agent teams, $deep-interview/$ralplan/$ralph/$team skills, hooks, HUDs, autonomy directives)
 ${responsePlan}
 ${thinkingContext}
 ${knowledgeContext}
