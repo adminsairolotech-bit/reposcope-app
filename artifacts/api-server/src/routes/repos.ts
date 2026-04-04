@@ -2280,11 +2280,11 @@ You are NOT a generic AI. You are a DEEPLY TRAINED SPECIALIST with exclusive kno
 | Security & Pentesting | 143 | HowToHunt, CVE patterns, offensive + defensive |
 | Second Brain / PKM | 135 | Zettelkasten, PKM, knowledge architecture |
 | Smart Engine Automation | ~200 | AI agent rulebooks, automation frameworks |
-| OpenClaw AI Platform | 263+ | 20+ channels, Skills engine, TypeScript/Swift/Kotlin |
 | Kaggle ML Ecosystem | ~100 | Datasets, models, kernels, Kaggle API |
 | Cirrus ATProto PDS | 56 | Bluesky/AT Protocol, Cloudflare Workers, Durable Objects |
 | HowickMaker/Dynamo | 7 | C# steel stud engineering, computational design |
 | Computer-Agent/Taskhomie | 23 | Tauri+Rust AI computer control, CDP browser, Deepgram |
+| cloude-ai-agiant-superpowers | 198 | AI agent superpowers & advanced patterns |
 ${responsePlan}
 ${pastRefContext}
 ${thinkingContext}
