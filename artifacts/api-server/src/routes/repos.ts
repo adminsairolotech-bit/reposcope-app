@@ -2025,16 +2025,52 @@ Never say "done" without explicit verification of each requirement.`,
 
   const skillOverlay = skill && SKILL_OVERLAYS[skill] ? SKILL_OVERLAYS[skill] : "";
 
-  // CLAUDE 4.6 UPGRADE 1: Knowledge injection 100 → 200 chunks
+  // ⚡ GOD LEVEL UPGRADE 1: Multi-Query Parallel Knowledge Retrieval (Codex-powered)
   const lastUserMsg = [...messages].reverse().find(m => m.role === "user")?.content ?? "";
   let knowledgeContext = "";
   let knowledgeCount = 0;
+  let searchQueryCount = 1;
   try {
-    const knowledgeItems = await searchBuddyKnowledge(lastUserMsg, 200); // UPGRADED: 100 → 200
-    knowledgeCount = knowledgeItems.length;
-    if (knowledgeItems.length > 0) {
-      const grouped: Record<string, typeof knowledgeItems> = {};
-      for (const k of knowledgeItems) {
+    // Step 1: Codex generates 4 diverse search queries
+    let searchQueries: string[] = [lastUserMsg];
+    try {
+      const queryGenPrompt = `Generate 4 diverse semantic search queries to retrieve the most relevant knowledge for this question. Think about: exact terms, synonyms, related concepts, specific sub-topics, technical patterns.
+
+Question: "${lastUserMsg.slice(0, 300)}"
+
+Respond ONLY with a JSON array of 4 strings on one line: ["query1","query2","query3","query4"]`;
+      const queriesRaw = await editingComplete(queryGenPrompt, 150);
+      const match = queriesRaw.match(/\[[\s\S]*?\]/);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          searchQueries = [...parsed.slice(0, 4), lastUserMsg];
+          searchQueryCount = searchQueries.length;
+        }
+      }
+    } catch { /* use single query fallback */ }
+
+    // Step 2: Parallel search all queries (60 chunks each)
+    const searchResults = await Promise.all(
+      searchQueries.map(q => searchBuddyKnowledge(q, 60).catch(() => []))
+    );
+
+    // Step 3: Deduplicate — keep highest score per chunk id, sort, take top 300
+    const scoreMap = new Map<number, Awaited<ReturnType<typeof searchBuddyKnowledge>>[0]>();
+    for (const batch of searchResults) {
+      for (const item of batch) {
+        const existing = scoreMap.get(item.id);
+        if (!existing || item.score > existing.score) scoreMap.set(item.id, item);
+      }
+    }
+    const merged = Array.from(scoreMap.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 300);
+
+    knowledgeCount = merged.length;
+    if (merged.length > 0) {
+      const grouped: Record<string, typeof merged> = {};
+      for (const k of merged) {
         if (!grouped[k.category]) grouped[k.category] = [];
         grouped[k.category].push(k);
       }
@@ -2044,82 +2080,109 @@ Never say "done" without explicit verification of each requirement.`,
         ).join("\n");
         return `### ${cat.toUpperCase()} (${items.length} chunks)\n${itemText}`;
       }).join("\n\n");
-      knowledgeContext = `\n\n---\n## 🧠 CLAUDE 4.6-LEVEL KNOWLEDGE BASE — ${knowledgeItems.length} Precision-Matched Chunks\n*Deep-retrieved from 2,800+ chunks across 9 elite repos using semantic scoring*\n\n${sections}\n\n---`;
+      knowledgeContext = `\n\n---\n## 🧠 GOD LEVEL KNOWLEDGE — ${merged.length} Precision Chunks\n*${searchQueryCount}-vector parallel retrieval from 2,700+ chunks across 11 elite repos*\n\n${sections}\n\n---`;
     }
   } catch { /* knowledge unavailable */ }
 
-  // CLAUDE 4.6 UPGRADE NEW: Codex-powered Tool Use — decide & execute before answering
+  // ⚡ GOD LEVEL UPGRADE 2: Agentic Tool Loop — up to 3 chained Codex tool calls
   let toolContext = "";
-  let activeToolName = "";
+  const activeTools: string[] = [];
   const githubToken = await getGitHubConnectorToken().catch(() => "") ?? "";
+
+  const executeTool = async (toolName: string, args: Record<string, string>): Promise<string> => {
+    if (toolName === "web_fetch" && args.url) {
+      try {
+        const r = await fetch(args.url, {
+          headers: { "User-Agent": "BuddyAI-GOD/1.0" },
+          signal: AbortSignal.timeout(8000),
+        });
+        const raw = await r.text();
+        const clean = raw.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+          .replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 4000);
+        return `## 🌐 WEB: ${args.url}\n${clean}`;
+      } catch { return `## 🌐 WEB FETCH FAILED: ${args.url}`; }
+
+    } else if (toolName === "github_search" && args.query) {
+      try {
+        const ep = args.type === "code" ? "code" : args.type === "issues" ? "issues" : "repositories";
+        const r = await fetch(`https://api.github.com/search/${ep}?q=${encodeURIComponent(args.query)}&per_page=6`, {
+          headers: { "Authorization": `token ${githubToken}`, "Accept": "application/vnd.github.v3+json", "User-Agent": "BuddyAI-GOD" },
+        });
+        const data = await r.json() as { items?: Array<{ full_name?: string; name?: string; description?: string; html_url: string; stargazers_count?: number }> };
+        const found = (data.items ?? []).slice(0, 6).map(x =>
+          `• **${x.full_name ?? x.name}** ⭐${x.stargazers_count ?? 0} — ${x.description ?? ""}\n  ${x.html_url}`
+        ).join("\n");
+        return `## 🔍 GITHUB SEARCH "${args.query}" (${ep})\n${found}`;
+      } catch { return `## 🔍 GITHUB SEARCH FAILED`; }
+
+    } else if (toolName === "artifact_hint") {
+      return `## 🎨 ARTIFACT MODE: ${args.type?.toUpperCase() ?? "CODE"}\nWrite a complete, self-contained ${args.type ?? "code"} artifact in a single fenced code block.`;
+    }
+    return "";
+  };
+
   try {
-    const toolDecisionPrompt = `You are Buddy AI's tool router. Decide if a tool is needed to best answer this message.
+    for (let iter = 0; iter < 3; iter++) {
+      const prevHistory = activeTools.length > 0
+        ? `\nAlready used tools [${activeTools.join(" → ")}]. Previous results:\n${toolContext.slice(0, 800)}\n`
+        : "";
+
+      const toolDecisionPrompt = `You are Buddy AI's agentic tool router (step ${iter + 1}/3).
 
 Available tools:
-- web_fetch(url) — Fetch live content from a URL (docs, APIs, news, GitHub pages)
-- github_search(query, type) — Search GitHub (type: "repos", "code", or "issues")
-- artifact_hint(type) — Signal response contains a renderable artifact (type: "html", "react", "python", "code")
+- web_fetch(url) — Fetch live content from a URL
+- github_search(query, type) — Search GitHub (type: "repos"/"code"/"issues")  
+- artifact_hint(type) — Signal artifact output (type: "html"/"react"/"python"/"code")
+- none — No tool needed, proceed to answer
+${prevHistory}
+User message: "${lastUserMsg.slice(0, 300)}"
 
-User message: "${lastUserMsg.slice(0, 400)}"
+Would another tool call significantly improve the answer? Respond ONLY with JSON:
+{"tool":"tool_name","args":{...}} OR {"tool":"none"}`;
 
-Respond ONLY with valid JSON on ONE line — no explanation:
-{"tool":"web_fetch","args":{"url":"https://..."}} OR
-{"tool":"github_search","args":{"query":"...","type":"repos"}} OR
-{"tool":"artifact_hint","args":{"type":"html"}} OR
-{"tool":null}`;
+      const toolRaw = await editingComplete(toolDecisionPrompt, 120);
+      let toolCall: { tool: string; args?: Record<string, string> } = { tool: "none" };
+      try {
+        const m = toolRaw.match(/\{[\s\S]*\}/);
+        if (m) toolCall = JSON.parse(m[0]);
+      } catch { break; }
 
-    const toolRaw = await editingComplete(toolDecisionPrompt, 120);
-    let toolCall: { tool: string | null; args?: Record<string, string> } = { tool: null };
-    try {
-      const jsonMatch = toolRaw.match(/\{[\s\S]*\}/);
-      if (jsonMatch) toolCall = JSON.parse(jsonMatch[0]);
-    } catch { /* parse fail — no tool */ }
+      if (!toolCall.tool || toolCall.tool === "none") break;
 
-    if (toolCall.tool) {
-      activeToolName = toolCall.tool;
-      const args = toolCall.args ?? {};
+      activeTools.push(toolCall.tool);
+      const result = await executeTool(toolCall.tool, toolCall.args ?? {});
+      toolContext += (toolContext ? "\n\n" : "") + result;
 
-      if (toolCall.tool === "web_fetch" && args.url) {
-        try {
-          const fetchRes = await fetch(args.url, {
-            headers: { "User-Agent": "BuddyAI/4.6 (RepoScope)" },
-            signal: AbortSignal.timeout(8000),
-          });
-          const rawHtml = await fetchRes.text();
-          const clean = rawHtml.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-            .replace(/<[^>]+>/g, " ")
-            .replace(/\s+/g, " ")
-            .trim()
-            .slice(0, 5000);
-          toolContext = `\n\n## 🌐 LIVE WEB CONTENT — ${args.url}\n\`\`\`\n${clean}\n\`\`\`\n*Integrate this live data into your response.*`;
-        } catch { toolContext = `\n\n## 🌐 WEB FETCH — Could not reach ${args.url}. Answer from knowledge.`; }
-
-      } else if (toolCall.tool === "github_search" && args.query) {
-        try {
-          const endpoint = args.type === "code" ? "code" : args.type === "issues" ? "issues" : "repositories";
-          const ghUrl = `https://api.github.com/search/${endpoint}?q=${encodeURIComponent(args.query)}&per_page=6`;
-          const ghRes = await fetch(ghUrl, {
-            headers: {
-              "Authorization": `token ${githubToken}`,
-              "Accept": "application/vnd.github.v3+json",
-              "User-Agent": "BuddyAI-RepoScope",
-            },
-          });
-          const ghData = await ghRes.json() as { items?: Array<{ full_name?: string; name?: string; description?: string; html_url: string; stargazers_count?: number }> };
-          const found = (ghData.items ?? []).slice(0, 6).map(r =>
-            `• **${r.full_name ?? r.name}** ⭐${r.stargazers_count ?? 0} — ${r.description ?? "No description"}\n  ${r.html_url}`
-          ).join("\n");
-          toolContext = `\n\n## 🔍 GITHUB SEARCH: "${args.query}" (${endpoint})\n${found}\n\n*Use these results to answer accurately.*`;
-        } catch { toolContext = `\n\n## 🔍 GITHUB SEARCH — Query failed. Answer from knowledge.`; }
-
-      } else if (toolCall.tool === "artifact_hint") {
-        toolContext = `\n\n## 🎨 ARTIFACT MODE: ${(args.type ?? "code").toUpperCase()}\nWrite a complete, self-contained, production-quality ${args.type ?? "code"} artifact. Use a single fenced code block with the language tag. The user will be able to preview/run it directly.`;
-      }
+      if (toolCall.tool === "artifact_hint") break;
     }
-  } catch { /* tool use failed — proceed without */ }
+  } catch { /* tool loop failed — proceed without */ }
 
-  // CLAUDE 4.6 UPGRADE 2: Extended Thinking — pre-reason before answering
+  // ⚡ GOD LEVEL UPGRADE 3: Codex Response Planning — structured plan before writing
+  let responsePlan = "";
+  try {
+    const toolSummary = activeTools.length > 0 ? `Tools used: ${activeTools.join(" → ")}` : "No external tools used";
+    const planPrompt = `You are Buddy AI's response architect. Create a precise response plan.
+
+Question: "${lastUserMsg.slice(0, 300)}"
+${toolSummary}
+Knowledge available: ${knowledgeCount} specialized chunks
+
+Create a structured plan (max 100 words):
+- Key sections to cover
+- Code needed? (yes/no, language)
+- Critical points not to miss
+- Edge cases or gotchas
+- Optimal response format (list/code/explanation/mixed)
+
+Output ONLY the plan as bullet points — no preamble:`;
+    const plan = await editingComplete(planPrompt, 220);
+    if (plan.trim().length > 20) {
+      responsePlan = `\n\n## 📋 RESPONSE BLUEPRINT\n${plan.trim()}\n\n*Execute this blueprint precisely — don't skip sections:*`;
+    }
+  } catch { /* planning unavailable */ }
+
+  // Extended Thinking — pre-reason before answering
   let thinkingContext = "";
   try {
     const thinkingPrompt = `Analyze this question deeply in 3-5 bullet points. Identify: (1) what is REALLY being asked, (2) what approach will give the BEST answer, (3) what pitfalls to avoid, (4) what specialized knowledge applies:
@@ -2151,6 +2214,7 @@ You are NOT a generic AI. You are a DEEPLY TRAINED SPECIALIST with:
 - **Deep analysis systems** (super-pro — advanced analytical frameworks)
 - **Kaggle ML ecosystem** (kagglehub — datasets, models, kernels, Kaggle API patterns)
 - **OpenClaw AI assistant platform** (openclaw.ai-NEW- — personal AI gateway, 20+ messaging channels, Skills engine, multi-platform TypeScript/Swift/Kotlin)
+${responsePlan}
 ${thinkingContext}
 ${knowledgeContext}
 
@@ -2217,9 +2281,11 @@ Intelligence level: CLAUDE 4.6 EQUIVALENT`;
 
   const onChunk = (chunk: string) => res.write(`data: ${JSON.stringify({ delta: chunk })}\n\n`);
 
-  // Send tool event to frontend so it can show the indicator
-  if (activeToolName) {
-    res.write(`data: ${JSON.stringify({ tool: activeToolName })}\n\n`);
+  // Send tool events to frontend (GOD LEVEL: all active tools in sequence)
+  if (activeTools.length > 0) {
+    for (const t of activeTools) {
+      res.write(`data: ${JSON.stringify({ tool: t })}\n\n`);
+    }
   }
 
   try {
