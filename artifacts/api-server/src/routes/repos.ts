@@ -32,6 +32,7 @@ import {
   searchBuddyKnowledge,
   getBuddyKnowledgeStats,
   clearBuddyKnowledge,
+  deleteBuddyKnowledgeByRepo,
 } from "../lib/db.js";
 import { githubConnectorFetch, getGitHubConnectorToken } from "../lib/githubConnector.js";
 
@@ -961,8 +962,8 @@ async function _runTrainJob(job: TrainJob, repos: string[], token: string, appen
     if (deleteRepos && deleteRepos.length > 0) {
       for (const dr of deleteRepos) {
         const repoShort = dr.split("/").pop() ?? dr;
-        await db.query(`DELETE FROM buddy_knowledge WHERE source_repo = $1`, [repoShort]);
-        log(`🗑️ Cleared existing chunks for repo: ${repoShort}`);
+        const deleted = await deleteBuddyKnowledgeByRepo(repoShort);
+        log(`🗑️ Cleared ${deleted} existing chunks for repo: ${repoShort}`);
       }
     }
 

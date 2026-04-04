@@ -350,3 +350,9 @@ export async function clearBuddyKnowledge(): Promise<void> {
   const db = getPool();
   await db.query(`DELETE FROM buddy_knowledge`);
 }
+
+export async function deleteBuddyKnowledgeByRepo(repoShort: string): Promise<number> {
+  const db = getPool();
+  const res = await db.query(`DELETE FROM buddy_knowledge WHERE source_repo = $1`, [repoShort]);
+  return res.rowCount ?? 0;
+}
