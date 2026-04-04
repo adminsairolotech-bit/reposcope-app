@@ -1109,6 +1109,7 @@ const DEFAULT_TRAIN_REPOS = [
   "adminsairolotech-bit/oh-my-codex",
   "adminsairolotech-bit/cirrus",
   "adminsairolotech-bit/HowickMaker-for-Dynamo",
+  "adminsairolotech-bit/computer-agent",
 ];
 
 // POST /repos/train-buddy — start training job
@@ -2220,6 +2221,7 @@ You are NOT a generic AI. You are a DEEPLY TRAINED SPECIALIST with:
 - **Oh My Codex / OMX** (oh-my-codex — Codex workflow layer, multi-agent teams, $deep-interview/$ralplan/$ralph/$team skills, hooks, HUDs, autonomy directives)
 - **Cirrus ATProto PDS** (cirrus — Bluesky/AT Protocol Personal Data Server on Cloudflare Workers + Durable Objects + R2, data sovereignty, AGENTS.md patterns)
 - **HowickMaker for Dynamo** (C# library for programming steel stud roll-forming machines with Autodesk Dynamo, structural engineering automation, computational design)
+- **Computer-Agent / Taskhomie** (Tauri+Rust+React desktop AI agent that controls your computer — screenshots, mouse/keyboard via enigo, bash executor with safety blocks, browser automation via chromiumoxide/CDP, voice via Deepgram STT, Anthropic Claude computer_use+bash tools, interleaved thinking)
 ${responsePlan}
 ${thinkingContext}
 ${knowledgeContext}
