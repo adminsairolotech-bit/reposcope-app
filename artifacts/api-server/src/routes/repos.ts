@@ -2305,4 +2305,245 @@ Intelligence level: CLAUDE 4.6 EQUIVALENT`;
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════
+// 🤖 MULTI-AGENT MODE — Parallel specialist agents + synthesis
+// ═══════════════════════════════════════════════════════════════════════
+router.post("/repos/chat-multi-agent", async (req, res) => {
+  const { messages } = req.body as {
+    messages: { role: "user" | "assistant" | "system"; content: string }[];
+  };
+  if (!Array.isArray(messages) || messages.length === 0) {
+    res.status(400).json({ error: "messages array required" });
+    return;
+  }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("X-Accel-Buffering", "no");
+
+  const send = (payload: Record<string, unknown>) =>
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+
+  const lastUserMsg = [...messages].reverse().find(m => m.role === "user")?.content ?? "";
+  const history = messages.map(m =>
+    `${m.role === "user" ? "User" : "Buddy"}: ${m.content}`
+  ).join("\n\n");
+
+  try {
+    // ── STEP 1: Orchestrator Codex — decompose query into agent tasks ──────
+    send({ agent: "orchestrator", status: "planning" });
+
+    let orchestratorPlan: {
+      research_query: string;
+      code_task: string;
+      web_url: string | null;
+      github_query: string | null;
+      focus: "research" | "code" | "web" | "all";
+    } = {
+      research_query: lastUserMsg,
+      code_task: lastUserMsg,
+      web_url: null,
+      github_query: null,
+      focus: "all",
+    };
+
+    try {
+      const orchPrompt = `You are the Orchestrator for a multi-agent AI system. Decompose this user query into specialized tasks for 3 parallel agents.
+
+User Query: "${lastUserMsg.slice(0, 400)}"
+
+Return ONLY valid JSON (no markdown):
+{
+  "research_query": "semantic query to search knowledge base (technical, specific)",
+  "code_task": "what coding task/analysis does the Code Agent handle? (or 'none' if no code needed)",
+  "web_url": "exact URL to fetch live content from (or null)",
+  "github_query": "GitHub search query (or null)",
+  "focus": "all|research|code|web"
+}`;
+      const raw = await editingComplete(orchPrompt, 200);
+      const match = raw.match(/\{[\s\S]*?\}/);
+      if (match) {
+        const parsed = JSON.parse(match[0]);
+        orchestratorPlan = { ...orchestratorPlan, ...parsed };
+      }
+    } catch { /* use defaults */ }
+
+    send({ agent: "orchestrator", status: "done", plan: orchestratorPlan.focus });
+
+    // ── STEP 2: 3 Parallel Agents ──────────────────────────────────────────
+    send({ agent: "research", status: "running" });
+    send({ agent: "code", status: "running" });
+    send({ agent: "web", status: "running" });
+
+    const githubToken = await getGitHubConnectorToken().catch(() => "") ?? "";
+
+    const [researchResult, codeResult, webResult] = await Promise.all([
+
+      // 🔬 RESEARCH AGENT — GOD LEVEL knowledge base (4-query parallel)
+      (async (): Promise<string> => {
+        try {
+          let searchQueries = [orchestratorPlan.research_query, lastUserMsg];
+          try {
+            const qPrompt = `Generate 4 diverse semantic search queries for: "${lastUserMsg.slice(0, 250)}"
+Respond ONLY with JSON array: ["q1","q2","q3","q4"]`;
+            const raw = await editingComplete(qPrompt, 120);
+            const m = raw.match(/\[[\s\S]*?\]/);
+            if (m) {
+              const parsed = JSON.parse(m[0]);
+              if (Array.isArray(parsed)) searchQueries = [...parsed.slice(0, 4), lastUserMsg];
+            }
+          } catch { /* use default */ }
+
+          const results = await Promise.all(
+            searchQueries.map(q => searchBuddyKnowledge(q, 60).catch(() => []))
+          );
+          const scoreMap = new Map<number, Awaited<ReturnType<typeof searchBuddyKnowledge>>[0]>();
+          for (const batch of results) {
+            for (const item of batch) {
+              const ex = scoreMap.get(item.id);
+              if (!ex || item.score > ex.score) scoreMap.set(item.id, item);
+            }
+          }
+          const merged = Array.from(scoreMap.values())
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 250);
+
+          if (merged.length === 0) return "No knowledge found.";
+
+          // Codex synthesizes the knowledge chunks into a focused answer
+          const chunks = merged.slice(0, 80).map(k =>
+            `[${k.source_repo}] ${k.title}: ${k.content}`
+          ).join("\n\n");
+
+          const synthPrompt = `You are the Research Agent. Using ONLY the knowledge chunks below, write a focused, dense technical summary answering: "${lastUserMsg.slice(0, 300)}"
+
+Be specific. Quote exact patterns, code, or techniques from the knowledge. Max 400 words.
+
+KNOWLEDGE CHUNKS (${merged.length} total, showing 80):
+${chunks}`;
+          const synthesis = await editingComplete(synthPrompt, 500);
+          return `## 🔬 Research Agent (${merged.length} knowledge chunks)\n\n${synthesis}`;
+        } catch (e) {
+          return `## 🔬 Research Agent\nKnowledge base search unavailable.`;
+        }
+      })(),
+
+      // 💻 CODE AGENT — Codex specialized for code tasks
+      (async (): Promise<string> => {
+        try {
+          if (orchestratorPlan.code_task === "none") {
+            return "## 💻 Code Agent\nNo code task for this query.";
+          }
+          const codePrompt = `You are the Code Agent — a senior engineer specialized in code generation, architecture, and technical implementation.
+
+Task: "${orchestratorPlan.code_task.slice(0, 400)}"
+Full context: "${lastUserMsg.slice(0, 600)}"
+
+Provide: 
+1. Technical approach (2-3 sentences)
+2. Key implementation details or code snippet if needed
+3. Any gotchas or edge cases
+
+Be dense and precise. Max 350 words. If code is needed, write it properly fenced.`;
+          const result = await editingComplete(codePrompt, 500);
+          return `## 💻 Code Agent\n\n${result}`;
+        } catch {
+          return `## 💻 Code Agent\nCode analysis unavailable.`;
+        }
+      })(),
+
+      // 🌐 WEB AGENT — live web + GitHub search
+      (async (): Promise<string> => {
+        const parts: string[] = [];
+        try {
+          if (orchestratorPlan.web_url) {
+            const r = await fetch(orchestratorPlan.web_url, {
+              headers: { "User-Agent": "BuddyAI-MultiAgent/1.0" },
+              signal: AbortSignal.timeout(7000),
+            });
+            const raw = await r.text();
+            const clean = raw
+              .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+              .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+              .replace(/<[^>]+>/g, " ")
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 2500);
+            parts.push(`### 🌐 Web: ${orchestratorPlan.web_url}\n${clean}`);
+          }
+        } catch { parts.push("Web fetch failed."); }
+
+        try {
+          if (orchestratorPlan.github_query) {
+            const r = await fetch(
+              `https://api.github.com/search/repositories?q=${encodeURIComponent(orchestratorPlan.github_query)}&per_page=5&sort=stars`,
+              { headers: { Authorization: `token ${githubToken}`, "User-Agent": "BuddyAI-MultiAgent", Accept: "application/vnd.github.v3+json" } }
+            );
+            const data = await r.json() as { items?: Array<{ full_name?: string; description?: string; html_url: string; stargazers_count?: number }> };
+            const found = (data.items ?? []).slice(0, 5).map(x =>
+              `• **${x.full_name}** ⭐${x.stargazers_count ?? 0} — ${x.description ?? ""}\n  ${x.html_url}`
+            ).join("\n");
+            parts.push(`### 🔍 GitHub: "${orchestratorPlan.github_query}"\n${found}`);
+          }
+        } catch { parts.push("GitHub search failed."); }
+
+        if (parts.length === 0) return "## 🌐 Web Agent\nNo live data needed for this query.";
+        return `## 🌐 Web Agent\n\n${parts.join("\n\n")}`;
+      })(),
+    ]);
+
+    send({ agent: "research", status: "done", preview: researchResult.slice(0, 120) + "..." });
+    send({ agent: "code", status: "done", preview: codeResult.slice(0, 120) + "..." });
+    send({ agent: "web", status: "done", preview: webResult.slice(0, 120) + "..." });
+
+    // ── STEP 3: Synthesis Agent — merge all outputs → final stream ─────────
+    send({ agent: "synthesis", status: "running" });
+
+    const SYNTHESIS_SYSTEM = `You are Buddy AI — a GOD-LEVEL intelligence operating with a 3-agent parallel research system. You have received reports from 3 specialist agents and must synthesize them into a single, exceptional response.
+
+## YOUR IDENTITY
+You are NOT generic AI. You are a DEEPLY TRAINED SPECIALIST with 3,500+ knowledge chunks from 14 elite repositories.
+
+## SYNTHESIS RULES
+1. MERGE all agent outputs — don't repeat them verbatim, synthesize insights
+2. Research Agent found specialized knowledge → cite it specifically
+3. Code Agent found implementation details → include working code
+4. Web Agent found live data → integrate it with context
+5. Be the FINAL AUTHORITY — give a definitive, complete answer
+6. Production-grade code only — no pseudocode, no TODOs
+7. Lead with the answer, then explain
+
+## IRON LAWS
+- Never mention the agents or this synthesis process to the user
+- Never say "According to the Research Agent..." — just give the answer
+- Format: headers for sections, code blocks for code, bullets for lists
+- Complete responses — never truncate`;
+
+    const synthesisPrompt = `${history}
+
+--- AGENT REPORTS (internal — synthesize these, do NOT expose them directly) ---
+
+${researchResult}
+
+${codeResult}
+
+${webResult}
+
+--- END AGENT REPORTS ---
+
+Now write the FINAL synthesized response to the user's question: "${lastUserMsg.slice(0, 400)}"
+
+Buddy (MULTI-AGENT synthesized response):`;
+
+    const onChunk = (chunk: string) => send({ delta: chunk });
+    await streamRuntimeAI(synthesisPrompt, SYNTHESIS_SYSTEM, onChunk, 16384);
+
+    send({ done: true });
+    res.end();
+  } catch (err) {
+    send({ error: "Multi-agent mode unavailable. Please add Gemini keys in Settings." });
+    res.end();
+  }
+});
+
 export default router;

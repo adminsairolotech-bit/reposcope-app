@@ -5,17 +5,28 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Loader2, MessageSquare, Send, X, Copy, Check, Eye, Globe, Github,
-  Zap, Brain, ChevronDown, ChevronUp, Maximize2
+  Zap, Brain, ChevronDown, ChevronUp, Maximize2, Users, FlaskConical,
+  Code2, Search, Cpu, CheckCircle2, Circle
 } from "lucide-react";
 import { getApiKey } from "@workspace/api-client-react";
 
 type ToolName = "web_fetch" | "github_search" | "artifact_hint" | null;
+
+type AgentName = "orchestrator" | "research" | "code" | "web" | "synthesis";
+type AgentStatus = "idle" | "planning" | "running" | "done";
+
+interface AgentState {
+  name: AgentName;
+  status: AgentStatus;
+  preview?: string;
+}
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   tool?: ToolName;
   isStreaming?: boolean;
+  multiAgent?: boolean;
 }
 
 // ── Code block parser ──────────────────────────────────────────────────────────
@@ -37,7 +48,7 @@ function parseCodeBlocks(text: string): Array<{ type: "text" | "code"; content: 
   return parts;
 }
 
-// ── Inline markdown (bold, italic, inline code, links) ─────────────────────────
+// ── Inline markdown ─────────────────────────────────────────────────────────────
 function renderInline(text: string): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
   const re = /(\*\*(.+?)\*\*|\*(.+?)\*|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\))/g;
@@ -56,7 +67,7 @@ function renderInline(text: string): React.ReactNode[] {
   return parts;
 }
 
-// ── Text renderer with headers, bullets, numbered lists ───────────────────────
+// ── Text renderer ─────────────────────────────────────────────────────────────
 function TextRenderer({ text }: { text: string }) {
   const lines = text.split("\n");
   const elements: React.ReactNode[] = [];
@@ -108,17 +119,15 @@ function TextRenderer({ text }: { text: string }) {
   return <div className="space-y-0.5">{elements}</div>;
 }
 
-// ── Code block with copy + HTML preview ───────────────────────────────────────
+// ── Code block ─────────────────────────────────────────────────────────────────
 function CodeBlock({ lang, code, onPreview }: { lang: string; code: string; onPreview?: () => void }) {
   const [copied, setCopied] = useState(false);
   const isHtml = lang === "html" || lang === "htm";
-
   const copy = () => {
     navigator.clipboard.writeText(code);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-
   return (
     <div className="my-2 rounded-lg overflow-hidden border border-border/50">
       <div className="flex items-center justify-between px-3 py-1.5 bg-muted/80 text-xs text-muted-foreground">
@@ -142,7 +151,7 @@ function CodeBlock({ lang, code, onPreview }: { lang: string; code: string; onPr
   );
 }
 
-// ── Tool use badge ─────────────────────────────────────────────────────────────
+// ── Tool badge ─────────────────────────────────────────────────────────────────
 function ToolBadge({ tool }: { tool: ToolName }) {
   if (!tool) return null;
   const config: Record<string, { icon: React.ReactNode; label: string; color: string }> = {
@@ -159,12 +168,57 @@ function ToolBadge({ tool }: { tool: ToolName }) {
   );
 }
 
+// ── Multi-Agent Status Panel ───────────────────────────────────────────────────
+const AGENT_CONFIG: Record<AgentName, { icon: React.ReactNode; label: string; color: string }> = {
+  orchestrator: { icon: <Cpu className="h-3 w-3" />,         label: "Orchestrator",  color: "text-orange-400" },
+  research:     { icon: <FlaskConical className="h-3 w-3" />, label: "Research",      color: "text-violet-400" },
+  code:         { icon: <Code2 className="h-3 w-3" />,        label: "Code",          color: "text-cyan-400" },
+  web:          { icon: <Globe className="h-3 w-3" />,        label: "Web",           color: "text-blue-400" },
+  synthesis:    { icon: <Brain className="h-3 w-3" />,        label: "Synthesis",     color: "text-green-400" },
+};
+
+function AgentStatusPanel({ agents }: { agents: AgentState[] }) {
+  if (agents.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1 p-2 rounded-lg bg-black/30 border border-border/30 mb-2">
+      <div className="text-[10px] text-muted-foreground font-medium mb-0.5 flex items-center gap-1">
+        <Users className="h-3 w-3 text-violet-400" /> Multi-Agent Team
+      </div>
+      {agents.map(agent => {
+        const cfg = AGENT_CONFIG[agent.name];
+        return (
+          <div key={agent.name} className={`flex items-center gap-1.5 text-xs ${cfg.color}`}>
+            {agent.status === "done"
+              ? <CheckCircle2 className="h-3 w-3 text-green-400 shrink-0" />
+              : agent.status === "running" || agent.status === "planning"
+              ? <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+              : <Circle className="h-3 w-3 opacity-30 shrink-0" />
+            }
+            {cfg.icon}
+            <span className="font-medium">{cfg.label}</span>
+            <span className="text-muted-foreground text-[10px]">
+              {agent.status === "planning" ? "planning..." :
+               agent.status === "running" ? "working..." :
+               agent.status === "done" ? "✓ done" : "waiting"}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Message renderer ───────────────────────────────────────────────────────────
 function MessageRenderer({ msg, onPreviewHtml }: { msg: Message; onPreviewHtml: (html: string) => void }) {
   const parts = parseCodeBlocks(msg.content);
   return (
     <div className="flex flex-col gap-0.5">
       {msg.tool && <ToolBadge tool={msg.tool} />}
+      {msg.multiAgent && (
+        <div className="inline-flex items-center gap-1 text-[10px] text-violet-400 opacity-75 mb-1">
+          <Users className="h-3 w-3" /> <span>Multi-Agent Response</span>
+        </div>
+      )}
       {parts.map((part, i) =>
         part.type === "code" ? (
           <CodeBlock
@@ -191,7 +245,6 @@ function HtmlPreviewModal({ html, onClose }: { html: string; onClose: () => void
   const blob = new Blob([html], { type: "text/html" });
   const url = URL.createObjectURL(blob);
   useEffect(() => () => URL.revokeObjectURL(url), [url]);
-
   return (
     <div className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center p-4">
       <div className="bg-background rounded-xl border shadow-2xl w-full max-w-3xl h-[80vh] flex flex-col">
@@ -209,7 +262,7 @@ function HtmlPreviewModal({ html, onClose }: { html: string; onClose: () => void
   );
 }
 
-// ── Thinking toggle ────────────────────────────────────────────────────────────
+// ── Thinking indicator ─────────────────────────────────────────────────────────
 function ThinkingIndicator({ active }: { active: boolean }) {
   if (!active) return null;
   return (
@@ -224,11 +277,13 @@ function ThinkingIndicator({ active }: { active: boolean }) {
 export function AiChat() {
   const [isOpen, setIsOpen] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [multiAgentMode, setMultiAgentMode] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  const [liveAgents, setLiveAgents] = useState<AgentState[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = useCallback(() => {
@@ -237,6 +292,147 @@ export function AiChat() {
 
   useEffect(() => { scrollToBottom(); }, [messages, scrollToBottom]);
 
+  // ── Single-Agent submit ──────────────────────────────────────────────────────
+  const submitSingleAgent = async (newMessages: Message[]) => {
+    const token = getApiKey() || undefined;
+    const response = await fetch("/api/repos/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+      }),
+    });
+    if (!response.ok || !response.body) throw new Error("Request failed");
+
+    const assistantIdx = newMessages.length;
+    setMessages(prev => [...prev, { role: "assistant", content: "", isStreaming: true }]);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let text = "";
+    let detectedTool: ToolName = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const payload = JSON.parse(line.slice(6));
+          if (payload.tool) {
+            detectedTool = payload.tool as ToolName;
+            setIsThinking(false);
+            setMessages(prev => {
+              const updated = [...prev];
+              if (updated[assistantIdx]) updated[assistantIdx] = { ...updated[assistantIdx], tool: detectedTool };
+              return updated;
+            });
+          } else if (payload.delta) {
+            setIsThinking(false);
+            text += payload.delta;
+            setMessages(prev => {
+              const updated = [...prev];
+              if (updated[assistantIdx]) updated[assistantIdx] = { ...updated[assistantIdx], content: text, isStreaming: true };
+              return updated;
+            });
+          } else if (payload.done || payload.error) {
+            setMessages(prev => {
+              const updated = [...prev];
+              if (updated[assistantIdx]) updated[assistantIdx] = { ...updated[assistantIdx], isStreaming: false };
+              return updated;
+            });
+          }
+        } catch { /* skip malformed */ }
+      }
+    }
+  };
+
+  // ── Multi-Agent submit ───────────────────────────────────────────────────────
+  const submitMultiAgent = async (newMessages: Message[]) => {
+    const token = getApiKey() || undefined;
+    const response = await fetch("/api/repos/chat-multi-agent", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        messages: newMessages.map(m => ({ role: m.role, content: m.content })),
+      }),
+    });
+    if (!response.ok || !response.body) throw new Error("Multi-agent request failed");
+
+    const assistantIdx = newMessages.length;
+    setMessages(prev => [...prev, { role: "assistant", content: "", isStreaming: true, multiAgent: true }]);
+
+    // Init agent states
+    const initAgents: AgentState[] = [
+      { name: "orchestrator", status: "idle" },
+      { name: "research", status: "idle" },
+      { name: "code", status: "idle" },
+      { name: "web", status: "idle" },
+      { name: "synthesis", status: "idle" },
+    ];
+    setLiveAgents(initAgents);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let text = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const payload = JSON.parse(line.slice(6));
+
+          if (payload.agent) {
+            // Update agent status
+            setIsThinking(false);
+            setLiveAgents(prev => prev.map(a =>
+              a.name === payload.agent
+                ? { ...a, status: payload.status as AgentStatus, preview: payload.preview }
+                : a
+            ));
+          } else if (payload.delta) {
+            setIsThinking(false);
+            text += payload.delta;
+            setMessages(prev => {
+              const updated = [...prev];
+              if (updated[assistantIdx]) {
+                updated[assistantIdx] = { ...updated[assistantIdx], content: text, isStreaming: true };
+              }
+              return updated;
+            });
+          } else if (payload.done || payload.error) {
+            setMessages(prev => {
+              const updated = [...prev];
+              if (updated[assistantIdx]) {
+                updated[assistantIdx] = { ...updated[assistantIdx], isStreaming: false };
+              }
+              return updated;
+            });
+            setLiveAgents([]);
+          }
+        } catch { /* skip malformed */ }
+      }
+    }
+  };
+
+  // ── Main submit handler ──────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
@@ -247,74 +443,13 @@ export function AiChat() {
     setMessages(newMessages);
     setIsLoading(true);
     setIsThinking(true);
+    setLiveAgents([]);
 
     try {
-      const token = getApiKey() || undefined;
-      const response = await fetch("/api/repos/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          messages: newMessages.map(m => ({ role: m.role, content: m.content })),
-        }),
-      });
-
-      if (!response.ok || !response.body) throw new Error("Request failed");
-
-      const assistantIdx = newMessages.length;
-      setMessages(prev => [...prev, { role: "assistant", content: "", isStreaming: true }]);
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let text = "";
-      let detectedTool: ToolName = null;
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const payload = JSON.parse(line.slice(6));
-            if (payload.tool) {
-              detectedTool = payload.tool as ToolName;
-              setIsThinking(false);
-              setMessages(prev => {
-                const updated = [...prev];
-                if (updated[assistantIdx]) {
-                  updated[assistantIdx] = { ...updated[assistantIdx], tool: detectedTool };
-                }
-                return updated;
-              });
-            } else if (payload.delta) {
-              setIsThinking(false);
-              text += payload.delta;
-              setMessages(prev => {
-                const updated = [...prev];
-                if (updated[assistantIdx]) {
-                  updated[assistantIdx] = { ...updated[assistantIdx], content: text, isStreaming: true };
-                }
-                return updated;
-              });
-            } else if (payload.done || payload.error) {
-              setMessages(prev => {
-                const updated = [...prev];
-                if (updated[assistantIdx]) {
-                  updated[assistantIdx] = { ...updated[assistantIdx], isStreaming: false };
-                }
-                return updated;
-              });
-            }
-          } catch { /* skip malformed event */ }
-        }
+      if (multiAgentMode) {
+        await submitMultiAgent(newMessages);
+      } else {
+        await submitSingleAgent(newMessages);
       }
     } catch (err) {
       console.error(err);
@@ -322,14 +457,15 @@ export function AiChat() {
         ...prev,
         { role: "assistant", content: "**Error**: Could not reach Buddy AI. Add Gemini keys in Settings." },
       ]);
+      setLiveAgents([]);
     } finally {
       setIsLoading(false);
       setIsThinking(false);
     }
   };
 
-  const chatWidth = isExpanded ? "w-[700px]" : "w-[420px]";
-  const chatHeight = isExpanded ? "h-[85vh]" : "h-[620px]";
+  const chatWidth = isExpanded ? "w-[720px]" : "w-[440px]";
+  const chatHeight = isExpanded ? "h-[90vh]" : "h-[640px]";
 
   if (!isOpen) {
     return (
@@ -349,17 +485,31 @@ export function AiChat() {
         <HtmlPreviewModal html={previewHtml} onClose={() => setPreviewHtml(null)} />
       )}
       <Card className={`fixed bottom-6 right-6 ${chatWidth} ${chatHeight} flex flex-col shadow-2xl z-50 transition-all duration-200 border-violet-500/20`}>
-        <CardHeader className="flex flex-row items-center justify-between py-2.5 px-4 border-b bg-gradient-to-r from-violet-950/50 to-blue-950/50 rounded-t-xl">
+        {/* ── Header ── */}
+        <CardHeader className="flex flex-row items-center justify-between py-2.5 px-4 border-b bg-gradient-to-r from-violet-950/50 to-blue-950/50 rounded-t-xl shrink-0">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
             <Brain className="h-4 w-4 text-violet-400" />
             <span className="bg-gradient-to-r from-violet-400 to-blue-400 bg-clip-text text-transparent">
               Buddy AI
             </span>
             <span className="text-[10px] font-normal text-muted-foreground bg-violet-500/10 px-1.5 py-0.5 rounded">
-              Claude 4.6-level
+              {multiAgentMode ? "Multi-Agent" : "GOD LEVEL"}
             </span>
           </CardTitle>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
+            {/* Multi-Agent Toggle */}
+            <button
+              onClick={() => setMultiAgentMode(m => !m)}
+              title={multiAgentMode ? "Switch to Single Agent" : "Switch to Multi-Agent Mode"}
+              className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border transition-all ${
+                multiAgentMode
+                  ? "border-violet-500/60 bg-violet-500/20 text-violet-300"
+                  : "border-border/40 bg-muted/30 text-muted-foreground hover:text-foreground hover:border-violet-500/30"
+              }`}
+            >
+              <Users className="h-3 w-3" />
+              {multiAgentMode ? "Multi" : "Single"}
+            </button>
             <Button
               variant="ghost"
               size="icon"
@@ -375,6 +525,7 @@ export function AiChat() {
           </div>
         </CardHeader>
 
+        {/* ── Messages ── */}
         <CardContent className="flex-1 p-0 overflow-hidden">
           <ScrollArea className="h-full p-4">
             <div className="flex flex-col gap-4">
@@ -382,8 +533,14 @@ export function AiChat() {
                 <div className="text-center mt-8 space-y-3">
                   <Brain className="h-10 w-10 text-violet-400 mx-auto opacity-60" />
                   <p className="text-sm text-muted-foreground">
-                    Buddy AI — 2,400+ knowledge chunks
+                    Buddy AI — 3,500+ knowledge chunks • 14 repos
                   </p>
+                  {multiAgentMode && (
+                    <div className="flex items-center justify-center gap-1.5 text-xs text-violet-400">
+                      <Users className="h-3.5 w-3.5" />
+                      <span>Multi-Agent Mode: Research + Code + Web agents in parallel</span>
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-2 mt-4">
                     {[
                       "Explain Claude hooks system",
@@ -405,7 +562,7 @@ export function AiChat() {
                 messages.map((msg, i) => (
                   <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                     <div
-                      className={`max-w-[90%] rounded-xl px-3 py-2.5 text-sm ${
+                      className={`max-w-[92%] rounded-xl px-3 py-2.5 text-sm ${
                         msg.role === "user"
                           ? "bg-gradient-to-br from-violet-600 to-blue-600 text-white"
                           : "bg-muted/60 text-foreground border border-border/30"
@@ -422,18 +579,45 @@ export function AiChat() {
                   </div>
                 ))
               )}
+
+              {/* Live agent status (during multi-agent processing) */}
+              {liveAgents.length > 0 && (
+                <div className="flex justify-start">
+                  <div className="max-w-[92%] w-full">
+                    <AgentStatusPanel agents={liveAgents} />
+                  </div>
+                </div>
+              )}
+
               <ThinkingIndicator active={isThinking} />
               <div ref={messagesEndRef} />
             </div>
           </ScrollArea>
         </CardContent>
 
-        <CardFooter className="p-3 border-t bg-muted/20">
+        {/* ── Footer ── */}
+        <CardFooter className="p-3 border-t bg-muted/20 shrink-0">
+          {multiAgentMode && (
+            <div className="w-full mb-2 flex items-center gap-2 text-[10px] text-muted-foreground">
+              <div className="flex items-center gap-1 text-violet-400">
+                <FlaskConical className="h-3 w-3" /> Research
+              </div>
+              <span>+</span>
+              <div className="flex items-center gap-1 text-cyan-400">
+                <Code2 className="h-3 w-3" /> Code
+              </div>
+              <span>+</span>
+              <div className="flex items-center gap-1 text-blue-400">
+                <Globe className="h-3 w-3" /> Web
+              </div>
+              <span className="ml-auto text-[9px]">agents run in parallel</span>
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="flex w-full gap-2">
             <Input
               value={input}
               onChange={e => setInput(e.target.value)}
-              placeholder="Ask Buddy anything..."
+              placeholder={multiAgentMode ? "Ask Buddy (multi-agent)..." : "Ask Buddy anything..."}
               disabled={isLoading}
               className="flex-1 bg-background/50 border-border/50 focus:border-violet-500/50 text-sm"
               onKeyDown={e => {
@@ -447,7 +631,10 @@ export function AiChat() {
               type="submit"
               size="icon"
               disabled={isLoading || !input.trim()}
-              className="bg-gradient-to-br from-violet-600 to-blue-600 hover:from-violet-500 hover:to-blue-500 shrink-0"
+              className={`shrink-0 ${multiAgentMode
+                ? "bg-gradient-to-br from-violet-700 to-cyan-600 hover:from-violet-600 hover:to-cyan-500"
+                : "bg-gradient-to-br from-violet-600 to-blue-600 hover:from-violet-500 hover:to-blue-500"
+              }`}
             >
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
             </Button>
