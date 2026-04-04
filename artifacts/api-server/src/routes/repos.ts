@@ -575,15 +575,17 @@ async function fetchContributors(slug: string): Promise<string> {
 
 const BINARY_EXTS = new Set([".png",".jpg",".jpeg",".gif",".svg",".ico",".webp",".bmp",".tiff",".mp4",".mp3",".wav",".zip",".tar",".gz",".rar",".7z",".exe",".dll",".so",".dylib",".bin",".pdf",".woff",".woff2",".ttf",".eot",".otf",".pyc",".pyo",".class",".jar",".lock"]);
 const MAX_FILE_SIZE = 400_000; // 400KB per file
-const MAX_FILES_PER_REPO = 500;
+const MAX_FILES_PER_REPO = 500; // default; overridden per training run
 const FETCH_CONCURRENCY = 8;
 
 async function fetchAllRepoFiles(
   slug: string,
   branch: string,
   send: (d: object) => void,
-  archToken?: string
+  archToken?: string,
+  maxFiles?: number
 ): Promise<Array<{ path: string; content: string }>> {
+  const limit = maxFiles ?? MAX_FILES_PER_REPO;
   const headers = buildGitHubHeaders(archToken);
   const treeRes = await fetch(
     `https://api.github.com/repos/${slug}/git/trees/${branch}?recursive=1`,
@@ -597,7 +599,7 @@ async function fetchAllRepoFiles(
       const ext = "." + (f.path.split(".").pop() ?? "");
       return !BINARY_EXTS.has(ext.toLowerCase());
     })
-    .slice(0, MAX_FILES_PER_REPO);
+    .slice(0, limit);
 
   send({ status: "fetching", content: `  ↳ ${slug}: ${blobs.length} text files found\n` });
 
@@ -947,18 +949,28 @@ interface TrainJob {
 }
 const trainJobs = new Map<string, TrainJob>();
 
-async function _runTrainJob(job: TrainJob, repos: string[], token: string, append = false) {
+async function _runTrainJob(job: TrainJob, repos: string[], token: string, append = false, maxFiles?: number, deleteRepos?: string[]) {
   const log = (msg: string) => { job.logs.push(msg); console.log("[train]", msg); };
 
   try {
     log(`🧠 BUDDY TRAINING STARTED — ${repos.length} original repos`);
-    log(`📡 Fetching files from each repo individually (bypasses 500-file limit)...`);
+    if (maxFiles) log(`📏 MAX FILES OVERRIDE: ${maxFiles} per repo`);
+    log(`📡 Fetching files from each repo individually...`);
+
+    // Delete specific repo chunks if requested (before appending new ones)
+    if (deleteRepos && deleteRepos.length > 0) {
+      for (const dr of deleteRepos) {
+        const repoShort = dr.split("/").pop() ?? dr;
+        await db.query(`DELETE FROM buddy_knowledge WHERE source_repo = $1`, [repoShort]);
+        log(`🗑️ Cleared existing chunks for repo: ${repoShort}`);
+      }
+    }
 
     const noopSend = (_d: object) => {};
     const allFilesWithRepo: Array<{ repoSlug: string; path: string; content: string }> = [];
 
     for (const repoSlug of repos) {
-      log(`\n📥 Fetching: ${repoSlug}`);
+      log(`\n📥 Fetching: ${repoSlug}${maxFiles ? ` (limit: ${maxFiles} files)` : ""}`);
       try {
         // Auto-detect default branch (main/master/etc.)
         let branch = "main";
@@ -969,7 +981,7 @@ async function _runTrainJob(job: TrainJob, repos: string[], token: string, appen
             branch = meta.default_branch ?? "main";
           }
         } catch { /* fallback to main */ }
-        const files = await fetchAllRepoFiles(repoSlug, branch, noopSend, token);
+        const files = await fetchAllRepoFiles(repoSlug, branch, noopSend, token, maxFiles);
         const textFiles = files.filter(f => {
           const ext = f.path.split(".").pop()?.toLowerCase() ?? "";
           return ["md","txt","json","yaml","yml","py","js","ts","sh","bash","prompt","system","toml","ini","conf","env","hooks","mjs","cjs"].includes(ext) || !ext;
@@ -1114,7 +1126,12 @@ const DEFAULT_TRAIN_REPOS = [
 
 // POST /repos/train-buddy — start training job
 router.post("/repos/train-buddy", async (req, res) => {
-  const { repos, append } = req.body as { repos?: string[]; append?: boolean };
+  const { repos, append, maxFiles, deleteRepos } = req.body as {
+    repos?: string[];
+    append?: boolean;
+    maxFiles?: number;       // override per-repo file limit (e.g. 3000 for big repos)
+    deleteRepos?: string[];  // clear chunks for these repos before training
+  };
   const repoList = (Array.isArray(repos) && repos.length > 0) ? repos : DEFAULT_TRAIN_REPOS;
   const appendMode = append === true;
 
@@ -1133,9 +1150,15 @@ router.post("/repos/train-buddy", async (req, res) => {
     startedAt: Date.now(),
   };
   trainJobs.set(jobId, job);
-  _runTrainJob(job, repoList, token, appendMode).catch(() => {});
+  _runTrainJob(job, repoList, token, appendMode, maxFiles, deleteRepos).catch(() => {});
 
-  res.json({ jobId, repos: repoList, append: appendMode, message: `Training started on ${repoList.length} repos (${appendMode ? "append" : "full retrain"} mode). Poll /api/repos/train-buddy-status/:jobId for progress.` });
+  res.json({
+    jobId,
+    repos: repoList,
+    append: appendMode,
+    maxFiles: maxFiles ?? MAX_FILES_PER_REPO,
+    message: `Training started on ${repoList.length} repos (${appendMode ? "append" : "full retrain"} mode, ${maxFiles ?? MAX_FILES_PER_REPO} files/repo max). Poll /api/repos/train-buddy-status/:jobId for progress.`
+  });
 });
 
 // GET /repos/train-buddy-status/:jobId
