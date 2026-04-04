@@ -1105,6 +1105,7 @@ const DEFAULT_TRAIN_REPOS = [
   "adminsairolotech-bit/sai-rolotech-smart-engines",
   "adminsairolotech-bit/super-pro",
   "adminsairolotech-bit/kagglehub",
+  "adminsairolotech-bit/openclaw.ai-NEW-",
 ];
 
 // POST /repos/train-buddy — start training job
@@ -2149,6 +2150,7 @@ You are NOT a generic AI. You are a DEEPLY TRAINED SPECIALIST with:
 - **Smart engine automation** (sai-rolotech-smart-engines — AI agent rulebooks, automation)
 - **Deep analysis systems** (super-pro — advanced analytical frameworks)
 - **Kaggle ML ecosystem** (kagglehub — datasets, models, kernels, Kaggle API patterns)
+- **OpenClaw AI assistant platform** (openclaw.ai-NEW- — personal AI gateway, 20+ messaging channels, Skills engine, multi-platform TypeScript/Swift/Kotlin)
 ${thinkingContext}
 ${knowledgeContext}
 
